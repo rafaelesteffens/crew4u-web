@@ -52,6 +52,16 @@ class CrewForYouHomePage extends StatefulWidget {
 
 class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   int selectedIndex = 0;
+  String escalaPeriodo = 'Mês';
+
+  bool jornadaAclimatado = true;
+  String jornadaFusoApresentacao = 'Brasília (UTC-3)';
+  String jornadaFusoUltimoDestino = 'Brasília (UTC-3)';
+  String jornadaTripulacao = 'Simples';
+  int jornadaEtapas = 2;
+  TimeOfDay jornadaApresentacao = const TimeOfDay(hour: 8, minute: 0);
+  bool jornadaHouveExtensao = false;
+  double jornadaMinutosExcedidos = 0;
 
   String selectedCargo = 'COPILOTO';
   bool gratificacaoAtiva = false;
@@ -244,7 +254,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse('https://crew4u-api.onrender.com/upload-escala'),
+        Uri.parse('http://127.0.0.1:8000/upload-escala'),
       );
 
       request.fields['cargo'] = selectedCargo;
@@ -301,7 +311,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         escalaEventos = eventos;
         resumo = rawSummary;
         importStatus = 'Arquivo lido com sucesso. ${eventos.length} eventos tratados encontrados.';
-        selectedIndex = 1;
+        selectedIndex = 0;
         isLoading = false;
       });
 
@@ -355,19 +365,99 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      buildUploadPage(),
+      buildEscalaDashboardPage(),
       buildHoleritePage(),
-      buildEscalaPage(),
+      buildTabelaPage(),
+      buildJornadaPage(),
       buildConfigPage(),
-      buildAeroportosPage(),
     ];
 
-    return Scaffold(
-      body: Row(
-        children: [
-          buildSidebar(),
-          Expanded(child: pages[selectedIndex]),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 760;
+
+        if (isMobile) {
+          return Scaffold(
+            backgroundColor: AppColors.navy,
+            body: pages[selectedIndex],
+            bottomNavigationBar: buildBottomNavBar(),
+          );
+        }
+
+        return Scaffold(
+          body: Row(
+            children: [
+              buildSidebar(),
+              Expanded(child: pages[selectedIndex]),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildBottomNavBar() {
+    final items = [
+      {'icon': Icons.flight_takeoff_outlined, 'label': 'Escala'},
+      {'icon': Icons.payments_outlined, 'label': 'Salário'},
+      {'icon': Icons.table_chart_outlined, 'label': 'Tabela'},
+      {'icon': Icons.timer_outlined, 'label': 'Jornada'},
+      {'icon': Icons.person_outline, 'label': 'Perfil'},
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.navy,
+        border: Border(top: BorderSide(color: AppColors.blue.withValues(alpha: 0.25))),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 20,
+            offset: const Offset(0, -6),
+          ),
         ],
+      ),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: List.generate(items.length, (index) {
+            final selected = selectedIndex == index;
+            return Expanded(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () => setState(() => selectedIndex = index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: selected ? AppColors.blue.withValues(alpha: 0.16) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        items[index]['icon'] as IconData,
+                        color: selected ? AppColors.cyan : Colors.white54,
+                        size: 24,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        items[index]['label'] as String,
+                        style: TextStyle(
+                          color: selected ? AppColors.cyan : Colors.white54,
+                          fontSize: 11,
+                          fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
       ),
     );
   }
@@ -390,11 +480,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           const SizedBox(height: 18),
           buildMiniLogo(),
           const SizedBox(height: 20),
-          buildNavButton(0, Icons.upload_file_outlined, 'Upload'),
-          buildNavButton(1, Icons.payments_outlined, 'Holerite'),
-          buildNavButton(2, Icons.flight_takeoff_outlined, 'Escala'),
-          buildNavButton(3, Icons.settings_outlined, 'Config'),
-          buildNavButton(4, Icons.place_outlined, 'Aeroportos'),
+          buildNavButton(0, Icons.flight_takeoff_outlined, 'Escala'),
+          buildNavButton(1, Icons.payments_outlined, 'Salário'),
+          buildNavButton(2, Icons.table_chart_outlined, 'Tabela'),
+          buildNavButton(3, Icons.timer_outlined, 'Jornada'),
+          buildNavButton(4, Icons.person_outline, 'Perfil'),
           const Spacer(),
           Padding(
             padding: const EdgeInsets.only(bottom: 18),
@@ -499,24 +589,39 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     required IconData icon,
     required Widget child,
   }) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFF7FBFF), Color(0xFFEAF2FB)],
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          children: [
-            buildPageHeader(title: title, subtitle: subtitle, icon: icon),
-            const SizedBox(height: 22),
-            Expanded(child: child),
-          ],
-        ),
-      ),
+    final isEscala = title == 'Escala';
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 760;
+        final horizontalPadding = isMobile ? 14.0 : 28.0;
+        final verticalPadding = isMobile ? 14.0 : 28.0;
+
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isEscala
+                  ? const [Color(0xFF030B18), Color(0xFF071A34), Color(0xFF020713)]
+                  : const [Color(0xFFF7FBFF), Color(0xFFEAF2FB)],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(horizontalPadding, verticalPadding, horizontalPadding, isMobile ? 8 : verticalPadding),
+              child: Column(
+                children: [
+                  buildPageHeader(title: title, subtitle: subtitle, icon: icon),
+                  SizedBox(height: isMobile ? 14 : 22),
+                  Expanded(child: child),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -525,57 +630,161 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     required String subtitle,
     required IconData icon,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.navy.withValues(alpha: 0.12),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 680;
+
+        return Container(
+          padding: EdgeInsets.all(isMobile ? 16 : 22),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
+            borderRadius: BorderRadius.circular(isMobile ? 24 : 28),
+            border: Border.all(color: AppColors.blue.withValues(alpha: 0.18)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.22),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              )
+            ],
+          ),
+          child: isMobile
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: AppColors.blue.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.blue.withValues(alpha: 0.35)),
+                          ),
+                          child: Icon(icon, color: AppColors.cyan, size: 26),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(child: buildHeaderTitleText(title, subtitle, mobile: true)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    buildHeaderActions(compact: true),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: AppColors.blue.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(17),
+                        border: Border.all(color: AppColors.blue.withValues(alpha: 0.35)),
+                      ),
+                      child: Icon(icon, color: AppColors.cyan, size: 29),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(child: buildHeaderTitleText(title, subtitle)),
+                    buildHeaderActions(),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+
+  Widget buildHeaderTitleText(String title, String subtitle, {bool mobile = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: mobile ? 25 : 30,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.8,
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          subtitle,
+          maxLines: mobile ? 2 : 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.70),
+            fontSize: mobile ? 12 : 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildHeaderActions({bool compact = false}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (isLoading)
           Container(
-            width: 54,
-            height: 54,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: AppColors.blue.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(17),
-              border: Border.all(color: AppColors.blue.withValues(alpha: 0.35)),
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
             ),
-            child: Icon(icon, color: AppColors.cyan, size: 29),
+            child: const Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
+                ),
+                SizedBox(width: 8),
+                Text(
+                  'Importando...',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                ),
+              ],
+            ),
+          )
+        else
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: pickExcelFile,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [AppColors.blue, AppColors.cyan]),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.blue.withValues(alpha: 0.25),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.upload_file_outlined, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Importar escala',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           ),
+        if (!compact) ...[
           const SizedBox(width: 16),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.8,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.70),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ]),
-          ),
           buildTopBrand(),
         ],
-      ),
+      ],
     );
   }
 
@@ -847,7 +1056,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final salario = toStringDynamicMap(holerite['salario']);
 
     return buildPageShell(
-      title: 'Holerite',
+      title: 'Salário',
       subtitle: selectedFileName == null ? 'Importe uma escala para começar.' : '$selectedCargo • $selectedFileName',
       icon: Icons.payments_outlined,
       child: ListView(
@@ -1031,7 +1240,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       const Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(
-            'Holerite Calculado',
+            'Salário Calculado',
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -0.4, color: AppColors.navy),
           ),
           SizedBox(height: 6),
@@ -2000,18 +2209,2030 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     }
   }
 
-  Widget buildEscalaPage() {
+
+  Widget buildEscalaDashboardPage() {
+    final eventos = eventosPrincipaisDaEscala();
+
     return buildPageShell(
       title: 'Escala',
-      subtitle: selectedFileName == null ? 'Nenhuma escala importada.' : 'Eventos tratados do arquivo: $selectedFileName',
+      subtitle: selectedFileName == null
+          ? 'Importe sua escala mensal para acompanhar seus voos.'
+          : 'Última escala importada: $selectedFileName',
       icon: Icons.flight_takeoff_outlined,
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          buildEscalaWelcomeCard(),
+          const SizedBox(height: 22),
+          buildEscalaPeriodoSelector(),
+          const SizedBox(height: 22),
+          buildEscalaResumoRapido(),
+          const SizedBox(height: 22),
+          if (eventos.isEmpty)
+            buildEscalaEmptyState()
+          else
+            buildEscalaTimeline(eventos),
+        ],
+      ),
+    );
+  }
+
+  Widget buildEscalaWelcomeCard() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 680;
+
+        final mainContent = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: isMobile ? 38 : 44,
+              width: isMobile ? 132 : 150,
+              child: Image.asset(
+                'assets/logo_crew4u.png',
+                fit: BoxFit.contain,
+                alignment: Alignment.centerLeft,
+                errorBuilder: (context, error, stackTrace) {
+                  return buildTextLogo(fontSize: isMobile ? 23 : 25, fourSize: isMobile ? 34 : 39, dark: false);
+                },
+              ),
+            ),
+            SizedBox(height: isMobile ? 16 : 20),
+            RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: 'Olá, ',
+                    style: TextStyle(color: Colors.white, fontSize: isMobile ? 30 : 34, fontWeight: FontWeight.w400),
+                  ),
+                  TextSpan(
+                    text: 'Rafael',
+                    style: TextStyle(color: AppColors.blue, fontSize: isMobile ? 30 : 34, fontWeight: FontWeight.w900),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              selectedFileName == null
+                  ? 'Importe sua escala para visualizar a rotina de voo.'
+                  : 'Sua escala está pronta para consulta offline no navegador. A aba Salário usa estes dados para calcular o holerite.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.70),
+                fontSize: isMobile ? 13 : 15,
+                fontWeight: FontWeight.w600,
+                height: 1.4,
+              ),
+            ),
+          ],
+        );
+
+        final monthPill = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.calendar_month_outlined, color: Colors.white, size: 19),
+              const SizedBox(width: 8),
+              Text(
+                mesReferenciaEscala(),
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.keyboard_arrow_down, color: Colors.white70, size: 18),
+            ],
+          ),
+        );
+
+        return Container(
+          padding: EdgeInsets.all(isMobile ? 22 : 26),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF020817), Color(0xFF071A34), Color(0xFF041126)],
+            ),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(color: AppColors.blue.withValues(alpha: 0.20)),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.blue.withValues(alpha: 0.13),
+                blurRadius: 30,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              Positioned(
+                right: isMobile ? -16 : 18,
+                bottom: isMobile ? -18 : -12,
+                child: Opacity(
+                  opacity: 0.09,
+                  child: Icon(Icons.flight_takeoff, size: isMobile ? 110 : 155, color: AppColors.cyan),
+                ),
+              ),
+              isMobile
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        mainContent,
+                        const SizedBox(height: 16),
+                        monthPill,
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(child: mainContent),
+                        const SizedBox(width: 18),
+                        monthPill,
+                      ],
+                    ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildEscalaPeriodoSelector() {
+    final periodos = ['Hoje', 'Semana', 'Mês'];
+
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: periodos.map((periodo) {
+          final selected = escalaPeriodo == periodo;
+
+          return Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => setState(() => escalaPeriodo = periodo),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  gradient: selected ? const LinearGradient(colors: [AppColors.blue, AppColors.cyan]) : null,
+                  color: selected ? null : Colors.white.withValues(alpha: 0.78),
+                  borderRadius: BorderRadius.circular(999),
+                  border: selected ? null : Border.all(color: Colors.white.withValues(alpha: 0.30)),
+                  boxShadow: selected
+                      ? [
+                          BoxShadow(
+                            color: AppColors.blue.withValues(alpha: 0.25),
+                            blurRadius: 18,
+                            offset: const Offset(0, 8),
+                          ),
+                        ]
+                      : [],
+                ),
+                child: Text(
+                  periodo,
+                  style: TextStyle(
+                    color: selected ? Colors.white : AppColors.navy,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget buildEscalaResumoRapido() {
+    final resumoPeriodo = calcularResumoDoPeriodoSelecionado();
+    final horasVoo = formatarMinutosComoHoras(resumoPeriodo['minutos_voo'] ?? 0);
+    final kmTotal = resumoPeriodo['km'] ?? 0;
+    final reservas = resumoPeriodo['reservas'] ?? 0;
+    final sobreavisos = resumoPeriodo['sobreavisos'] ?? 0;
+    final folgas = resumoPeriodo['folgas'] ?? 0;
+    final contexto = contextoResumoSelecionado();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 680;
+        final cardWidth = isMobile ? (constraints.maxWidth - 12) / 2 : (constraints.maxWidth - 56) / 5;
+
+        return Wrap(
+          spacing: 14,
+          runSpacing: 14,
+          children: [
+            SizedBox(
+              width: cardWidth,
+              child: buildEscalaMetricCard(
+                icon: Icons.schedule_outlined,
+                title: 'Horas de voo',
+                value: horasVoo,
+                subtitle: contexto,
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: buildEscalaMetricCard(
+                icon: Icons.route_outlined,
+                title: 'Km voados',
+                value: formatarNumeroInteiro(kmTotal),
+                subtitle: contexto,
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: buildEscalaMetricCard(
+                icon: Icons.event_available_outlined,
+                title: 'Reservas',
+                value: reservas.toString(),
+                subtitle: contexto,
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: buildEscalaMetricCard(
+                icon: Icons.notifications_active_outlined,
+                title: 'Sobreavisos',
+                value: sobreavisos.toString(),
+                subtitle: contexto,
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: buildEscalaMetricCard(
+                icon: Icons.weekend_outlined,
+                title: 'Folgas',
+                value: folgas.toString(),
+                subtitle: contexto,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget buildEscalaMetricCard({
+    required IconData icon,
+    required String title,
+    required String value,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.navy.withValues(alpha: 0.08),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.blue,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Icon(icon, color: Colors.white, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            value,
+            style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildEscalaEmptyState() {
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(34),
+        child: Column(
+          children: [
+            Container(
+              width: 70,
+              height: 70,
+              decoration: BoxDecoration(
+                color: AppColors.softBlue,
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: const Icon(Icons.upload_file_outlined, color: AppColors.blue, size: 34),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Nenhuma escala importada ainda',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppColors.navy),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Clique em “Importar escala” no canto superior direito para carregar o Excel e gerar sua linha do tempo.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF617086), fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 22),
+            PrimaryButton(
+              icon: Icons.upload_file_outlined,
+              label: 'Importar escala Excel',
+              onTap: pickExcelFile,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildEscalaTimeline(List<Map<String, String>> eventos) {
+    final grupos = agruparEventosPorData(eventos);
+
+    return Column(
+      children: grupos.entries.map((entry) {
+        return buildDiaEscalaCard(entry.key, entry.value);
+      }).toList(),
+    );
+  }
+
+  Widget buildDiaEscalaCard(String data, List<Map<String, String>> eventos) {
+    final partes = data.split('/');
+    final dia = partes.isNotEmpty ? partes[0] : data;
+    final mes = partes.length >= 2 ? nomeMesCurto(partes[1]) : '';
+    final semana = diaSemanaCurto(data);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 620;
+
+        final dateBox = SizedBox(
+          width: isMobile ? 58 : 76,
+          child: Column(
+            children: [
+              Text(
+                semana,
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.62), fontSize: isMobile ? 11 : 13, fontWeight: FontWeight.w900),
+              ),
+              Text(
+                dia,
+                style: TextStyle(color: Colors.white, fontSize: isMobile ? 29 : 34, fontWeight: FontWeight.w900, letterSpacing: -1),
+              ),
+              Text(
+                mes,
+                style: TextStyle(color: AppColors.blue, fontSize: isMobile ? 12 : 14, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        );
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: EdgeInsets.all(isMobile ? 12 : 16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF071A34).withValues(alpha: 0.82),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.blue.withValues(alpha: 0.16)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.20),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              dateBox,
+              Container(width: 1, height: (eventos.length * 88).clamp(88, 300).toDouble(), color: AppColors.blue.withValues(alpha: 0.24)),
+              SizedBox(width: isMobile ? 10 : 16),
+              Expanded(
+                child: Column(
+                  children: buildEventosComApresentacao(eventos),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  List<Widget> buildEventosComApresentacao(List<Map<String, String>> eventos) {
+    final widgets = <Widget>[];
+    String? ultimoDutyReport;
+
+    for (var i = 0; i < eventos.length; i++) {
+      final event = eventos[i];
+      final dutyReport = horarioLimpo(event['duty_report'] ?? '');
+      final tipoAtual = (event['tipo'] ?? '').toUpperCase().trim();
+      final deveMostrarApresentacao = tipoAtual == 'VOO' && dutyReport.isNotEmpty && dutyReport != ultimoDutyReport;
+
+      if (deveMostrarApresentacao) {
+        final analise = calcularLimiteJornadaDaEscala(eventos, i, dutyReport);
+        widgets.add(buildDutyReportBanner(dutyReport, analise));
+        ultimoDutyReport = dutyReport;
+      }
+
+      widgets.add(buildEventoEscalaRow(event));
+    }
+
+    return widgets;
+  }
+
+  Map<String, dynamic> calcularLimiteJornadaDaEscala(
+    List<Map<String, String>> eventos,
+    int indexInicio,
+    String dutyReport,
+  ) {
+    final eventoInicio = eventos[indexInicio];
+    final dataBase = parseDataPtBr(eventoInicio['data'] ?? '');
+    final minutosReport = parseHoraMinuto(dutyReport);
+
+    if (dataBase == null || minutosReport == null) {
+      return {
+        'disponivel': false,
+      };
+    }
+
+    var etapas = 0;
+
+    for (var i = indexInicio; i < eventos.length; i++) {
+      final atual = eventos[i];
+      final outroDuty = horarioLimpo(atual['duty_report'] ?? '');
+
+      if (i > indexInicio && outroDuty.isNotEmpty) {
+        break;
+      }
+
+      final tipo = (atual['tipo'] ?? '').toUpperCase().trim();
+      if (tipo == 'VOO') {
+        etapas += 1;
+      }
+    }
+
+    if (etapas <= 0) etapas = 1;
+
+    final faixa = linhaTabelaB1(minutosReport);
+    final coluna = colunaTabelaB1(etapas);
+    final valores = tabelaB1()[faixa]![coluna]!;
+
+    final limiteJornadaMin = (valores[0] * 60).round();
+    final limiteVooMin = (valores[1] * 60).round();
+
+    final extraDiasReport = extrairOffsetDias(dutyReport);
+    final inicio = DateTime(
+      dataBase.year,
+      dataBase.month,
+      dataBase.day + extraDiasReport,
+      minutosReport ~/ 60,
+      minutosReport % 60,
+    );
+
+    final termino = inicio.add(Duration(minutes: limiteJornadaMin));
+    final corteMotores = termino.subtract(const Duration(minutes: 30));
+
+    return {
+      'disponivel': true,
+      'etapas': etapas,
+      'faixa': faixa,
+      'coluna': coluna,
+      'limite_jornada_min': limiteJornadaMin,
+      'limite_voo_min': limiteVooMin,
+      'limite_jornada_texto': formatarMinutosComoDuracao(limiteJornadaMin),
+      'limite_voo_texto': formatarMinutosComoDuracao(limiteVooMin),
+      'termino_texto': formatarHoraDateTimeComBase(termino, dataBase),
+      'corte_texto': formatarHoraDateTimeComBase(corteMotores, dataBase),
+    };
+  }
+
+  Widget buildDutyReportBanner(String dutyReport, Map<String, dynamic> analise) {
+    final disponivel = analise['disponivel'] == true;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF122A4B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.28)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.cyan.withValues(alpha: 0.07),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 620;
+
+          final header = Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.cyan.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.login_outlined, color: AppColors.cyan, size: 19),
+              ),
+              const SizedBox(width: 11),
+              const Text(
+                'Apresentação',
+                style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900),
+              ),
+              const Spacer(),
+              Text(
+                dutyReport,
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: -0.2),
+              ),
+            ],
+          );
+
+          if (!disponivel) return header;
+
+          final terminoTexto = analise['termino_texto'].toString();
+
+          final limiteJornada = Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.blue.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: AppColors.blue.withValues(alpha: 0.34)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.timelapse_outlined, size: 15, color: AppColors.cyan.withValues(alpha: 0.95)),
+                  const SizedBox(width: 7),
+                  Text(
+                    'Limite de jornada $terminoTexto',
+                    style: const TextStyle(
+                      color: AppColors.cyan,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              limiteJornada,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget buildJornadaLimitChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppColors.cyan.withValues(alpha: 0.90)),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.76),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool ehFolgaOuDayOff(Map<String, String> event) {
+    final tipo = (event['tipo'] ?? '').toUpperCase().trim();
+    final id = (event['identificacao'] ?? '').toUpperCase().trim();
+    final pairing = (event['pairing'] ?? '').toUpperCase().trim();
+    final item = (event['item'] ?? '').toUpperCase().trim();
+
+    return tipo == 'DO' ||
+        tipo == 'OFF' ||
+        tipo == 'FOLGA' ||
+        tipo.contains('FOLGA') ||
+        tipo.contains('OFF') ||
+        id == 'DO' ||
+        id == 'OFF' ||
+        id == 'FOLGA' ||
+        id.contains('FOLGA') ||
+        pairing == 'DO' ||
+        pairing == 'OFF' ||
+        item == 'DO' ||
+        item == 'OFF';
+  }
+
+  Widget buildEventoEscalaRow(Map<String, String> event) {
+    final tipo = (event['tipo'] ?? '').toUpperCase();
+    final idUpper = (event['identificacao'] ?? '').toUpperCase();
+    final isVoo = tipo == 'VOO';
+    final isSobreaviso = tipo.contains('SOBREAVISO') || idUpper.startsWith('HSB');
+    final isReserva = tipo.contains('RESERVA') || idUpper.startsWith('ASB');
+    final isFolga = ehFolgaOuDayOff(event);
+    final origem = event['origem'] ?? '';
+    final destino = event['destino'] ?? '';
+    final saida = event['saida'] ?? '';
+    final chegada = event['chegada'] ?? '';
+    final id = event['identificacao'] ?? '';
+    final duracaoTexto = duracaoAtividadeTexto(event);
+
+    final Color color;
+    final IconData icon;
+    final String label;
+
+    if (isVoo) {
+      color = AppColors.blue;
+      icon = Icons.flight_takeoff;
+      label = 'Voo';
+    } else if (isReserva) {
+      color = const Color(0xFFE53935);
+      icon = Icons.event_available_outlined;
+      label = 'Reserva';
+    } else if (isSobreaviso) {
+      color = const Color(0xFFF6B21A);
+      icon = Icons.notifications_none_outlined;
+      label = 'Sobreaviso';
+    } else if (isFolga) {
+      color = AppColors.green;
+      icon = Icons.weekend_outlined;
+      label = 'Folga';
+    } else {
+      color = AppColors.green;
+      icon = Icons.event_note_outlined;
+      label = tipo.isEmpty ? 'Escala' : tipo;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 520;
+
+        final tag = Container(
+          padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 12, vertical: isMobile ? 8 : 9),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: isSobreaviso ? 0.92 : 1),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [BoxShadow(color: color.withValues(alpha: 0.22), blurRadius: 12)],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: isMobile ? 16 : 18),
+              const SizedBox(width: 7),
+              Text(label, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: isMobile ? 12 : 13)),
+            ],
+          ),
+        );
+
+        final routeContent = isVoo
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  buildAirportTime(saida, origem, compact: isMobile),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 14),
+                    child: const Icon(Icons.arrow_forward, color: AppColors.blue, size: 24),
+                  ),
+                  buildAirportTime(chegada, destino, compact: isMobile),
+                ],
+              )
+            : Text(
+                isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.white, fontSize: isMobile ? 15 : 18, fontWeight: FontWeight.w800),
+              );
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 14, vertical: isMobile ? 10 : 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.055),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: isMobile
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        tag,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            id,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: Colors.white54),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        if (duracaoTexto.isNotEmpty) buildDurationChip(duracaoTexto, color, compact: true),
+                        const Spacer(),
+                        Flexible(child: Align(alignment: Alignment.centerRight, child: routeContent)),
+                      ],
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    tag,
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: 92,
+                      child: Text(
+                        id,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    if (duracaoTexto.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      buildDurationChip(duracaoTexto, color),
+                    ],
+                    Expanded(child: Align(alignment: Alignment.centerRight, child: routeContent)),
+                    const SizedBox(width: 12),
+                    const Icon(Icons.chevron_right, color: Colors.white54),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+
+  Widget buildDurationChip(String text, Color color, {bool compact = false}) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 9,
+        vertical: compact ? 4 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.26)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.schedule, color: color.withValues(alpha: 0.92), size: compact ? 12 : 13),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.68),
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String duracaoAtividadeTexto(Map<String, String> event) {
+    final duracao = duracaoAtividade(event);
+    if (duracao == null || duracao.inMinutes <= 0) return '';
+
+    final totalMinutos = duracao.inMinutes;
+    final horas = totalMinutos ~/ 60;
+    final minutos = totalMinutos % 60;
+
+    if (horas <= 0) return '${minutos}min';
+    if (minutos == 0) return '${horas}h';
+    return '${horas}h${minutos.toString().padLeft(2, '0')}';
+  }
+
+  Duration? duracaoAtividade(Map<String, String> event) {
+    final inicio = inicioAtividadeDateTime(event);
+    final fim = fimAtividadeDateTime(event);
+    if (inicio == null || fim == null) return null;
+    if (fim.isAtSameMomentAs(inicio)) return null;
+
+    var fimAjustado = fim;
+    if (fimAjustado.isBefore(inicio)) {
+      fimAjustado = fimAjustado.add(const Duration(days: 1));
+    }
+
+    return fimAjustado.difference(inicio);
+  }
+
+  DateTime? inicioAtividadeDateTime(Map<String, String> event) {
+    final dataBase = parseDataPtBr(event['data'] ?? '');
+    if (dataBase == null) return null;
+
+    final tipo = (event['tipo'] ?? '').toUpperCase();
+    final isVoo = tipo == 'VOO';
+    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+
+    final horaPreferida = primeiroHorarioValido([
+      if (isVoo) event['saida'],
+      if (!isVoo) event['saida'],
+      if (!isVoo) event['duty_report'],
+      event['saida'],
+      event['duty_report'],
+    ]);
+
+    if (horaPreferida == null) return null;
+    final minutos = parseHoraMinuto(horaPreferida);
+    if (minutos == null) return null;
+
+    final extraDias = extrairOffsetDias(horaPreferida);
+    return DateTime(dataBase.year, dataBase.month, dataBase.day + extraDias, minutos ~/ 60, minutos % 60);
+  }
+
+  DateTime? fimAtividadeDateTime(Map<String, String> event) {
+    final dataBase = parseDataPtBr(event['data'] ?? '');
+    if (dataBase == null) return null;
+
+    final tipo = (event['tipo'] ?? '').toUpperCase();
+    final isVoo = tipo == 'VOO';
+    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+
+    final horaPreferida = primeiroHorarioValido([
+      if (isVoo) event['chegada'],
+      if (!isVoo) event['chegada'],
+      if (!isVoo) event['duty_debrief'],
+      event['chegada'],
+      event['duty_debrief'],
+      event['saida'],
+    ]);
+
+    if (horaPreferida == null) return null;
+    final minutos = parseHoraMinuto(horaPreferida);
+    if (minutos == null) return null;
+
+    final extraDias = extrairOffsetDias(horaPreferida);
+    return DateTime(dataBase.year, dataBase.month, dataBase.day + extraDias, minutos ~/ 60, minutos % 60);
+  }
+
+  String formatarIntervaloEvento(String inicio, String fim) {
+    final i = inicio.trim();
+    final f = fim.trim();
+    if (i.isEmpty && f.isEmpty) return 'Atividade programada';
+    if (i.isEmpty) return f;
+    if (f.isEmpty) return i;
+    return '$i – $f';
+  }
+
+  Widget buildAirportTime(String time, String airport, {bool compact = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          time,
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.58), fontSize: compact ? 11 : 12, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          airport,
+          style: TextStyle(color: Colors.white, fontSize: compact ? 18 : 22, fontWeight: FontWeight.w900, letterSpacing: -0.4),
+        ),
+      ],
+    );
+  }
+
+  List<Map<String, String>> eventosPrincipaisDaEscala() {
+    final agora = DateTime.now();
+    final fimJanela = fimDaJanelaEscala(agora);
+
+    final base = escalaEventos.where((event) {
+      if (!ehEventoVisivelNaEscala(event)) return false;
+
+      final inicio = inicioEventoDateTime(event);
+      final fim = fimEventoDateTime(event);
+      if (inicio == null && fim == null) return false;
+
+      final inicioEfetivo = inicio ?? fim!;
+      final fimEfetivo = fim ?? inicioEfetivo;
+
+      final jaTerminou = fimEfetivo.isBefore(agora);
+      if (jaTerminou) return false;
+
+      if (escalaPeriodo == 'Hoje' && !mesmoDia(inicioEfetivo, agora) && !mesmoDia(fimEfetivo, agora)) return false;
+
+      if (fimJanela != null && inicioEfetivo.isAfter(fimJanela)) return false;
+
+      return true;
+    }).toList();
+
+    base.sort((a, b) {
+      final dataA = inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+      final dataB = inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+      return dataA.compareTo(dataB);
+    });
+
+    return base;
+  }
+
+  bool ehEventoVisivelNaEscala(Map<String, String> event) {
+    final tipo = (event['tipo'] ?? '').toUpperCase();
+    final id = (event['identificacao'] ?? '').toUpperCase();
+
+    return tipo == 'VOO' ||
+        tipo.contains('SOBREAVISO') ||
+        tipo.contains('RESERVA') ||
+        ehFolgaOuDayOff(event) ||
+        id.startsWith('HSB') ||
+        id.startsWith('ASB');
+  }
+
+  DateTime? fimDaJanelaEscala(DateTime agora) {
+    if (escalaPeriodo == 'Hoje') {
+      return DateTime(agora.year, agora.month, agora.day, 23, 59, 59);
+    }
+
+    if (escalaPeriodo == 'Semana') {
+      return DateTime(agora.year, agora.month, agora.day + 6, 23, 59, 59);
+    }
+
+    return null;
+  }
+
+  Map<String, int> calcularResumoDoPeriodoSelecionado() {
+    final eventos = eventosParaResumoSelecionado();
+    var minutosVoo = 0;
+    var km = 0;
+    var reservas = 0;
+    var sobreavisos = 0;
+    var folgas = 0;
+
+    for (final event in eventos) {
+      final tipo = (event['tipo'] ?? '').toUpperCase();
+      final id = (event['identificacao'] ?? '').toUpperCase();
+      final isVoo = tipo == 'VOO';
+      final isReserva = tipo.contains('RESERVA') || id.startsWith('ASB');
+      final isSobreaviso = tipo.contains('SOBREAVISO') || id.startsWith('HSB');
+      final isFolga = ehFolgaOuDayOff(event);
+
+      if (isVoo) {
+        minutosVoo += diferencaMinutos(event['saida'] ?? '', event['chegada'] ?? '');
+        km += toDouble(event['distancia_km']).round();
+      }
+
+      if (isReserva) reservas++;
+      if (isSobreaviso) sobreavisos++;
+      if (isFolga) folgas++;
+    }
+
+    return {
+      'minutos_voo': minutosVoo,
+      'km': km,
+      'reservas': reservas,
+      'sobreavisos': sobreavisos,
+      'folgas': folgas,
+    };
+  }
+
+  List<Map<String, String>> eventosParaResumoSelecionado() {
+    final agora = DateTime.now();
+    final fimJanela = fimDaJanelaEscala(agora);
+    final mesReferencia = mesAnoReferenciaEscala();
+
+    final eventos = escalaEventos.where((event) {
+      if (!ehEventoVisivelNaEscala(event)) return false;
+
+      final inicio = inicioEventoDateTime(event);
+      final fim = fimEventoDateTime(event);
+      if (inicio == null && fim == null) return false;
+
+      final inicioEfetivo = inicio ?? fim!;
+      final fimEfetivo = fim ?? inicioEfetivo;
+
+      if (escalaPeriodo == 'Hoje') {
+        return (mesmoDia(inicioEfetivo, agora) || mesmoDia(fimEfetivo, agora)) && !fimEfetivo.isBefore(agora);
+      }
+
+      if (escalaPeriodo == 'Semana') {
+        return !fimEfetivo.isBefore(agora) && (fimJanela == null || !inicioEfetivo.isAfter(fimJanela));
+      }
+
+      if (mesReferencia != null) {
+        return inicioEfetivo.month == mesReferencia.month && inicioEfetivo.year == mesReferencia.year;
+      }
+
+      return true;
+    }).toList();
+
+    eventos.sort((a, b) {
+      final dataA = inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+      final dataB = inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+      return dataA.compareTo(dataB);
+    });
+
+    return eventos;
+  }
+
+  String contextoResumoSelecionado() {
+    if (escalaPeriodo == 'Hoje') return 'hoje';
+    if (escalaPeriodo == 'Semana') return '7 dias';
+    return mesReferenciaEscala();
+  }
+
+  String formatarMinutosComoHoras(int totalMinutos) {
+    final horas = totalMinutos ~/ 60;
+    final minutos = totalMinutos % 60;
+    return '$horas:${minutos.toString().padLeft(2, '0')}';
+  }
+
+  bool mesmoDia(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  DateTime? mesAnoReferenciaEscala() {
+    for (final event in escalaEventos) {
+      final data = parseDataPtBr(event['data'] ?? '');
+      if (data != null) return DateTime(data.year, data.month);
+    }
+    return null;
+  }
+
+  String horarioLimpo(String value) {
+    return value.replaceAll(RegExp(r'\(.*?\)'), '').trim();
+  }
+
+  DateTime? inicioEventoDateTime(Map<String, String> event) {
+    final dataBase = parseDataPtBr(event['data'] ?? '');
+    if (dataBase == null) return null;
+    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+
+    final horaPreferida = primeiroHorarioValido([
+      event['duty_report'],
+      event['saida'],
+    ]);
+
+    if (horaPreferida == null) return dataBase;
+
+    final minutos = parseHoraMinuto(horaPreferida);
+    if (minutos == null) return dataBase;
+
+    final extraDias = extrairOffsetDias(horaPreferida);
+    return DateTime(
+      dataBase.year,
+      dataBase.month,
+      dataBase.day + extraDias,
+      minutos ~/ 60,
+      minutos % 60,
+    );
+  }
+
+  DateTime? fimEventoDateTime(Map<String, String> event) {
+    final dataBase = parseDataPtBr(event['data'] ?? '');
+    if (dataBase == null) return null;
+    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+
+    final horaPreferida = primeiroHorarioValido([
+      event['duty_debrief'],
+      event['chegada'],
+      event['saida'],
+      event['duty_report'],
+    ]);
+
+    if (horaPreferida == null) return dataBase;
+
+    final minutosFim = parseHoraMinuto(horaPreferida);
+    if (minutosFim == null) return dataBase;
+
+    var extraDias = extrairOffsetDias(horaPreferida);
+    final inicio = inicioEventoDateTime(event);
+
+    var fim = DateTime(
+      dataBase.year,
+      dataBase.month,
+      dataBase.day + extraDias,
+      minutosFim ~/ 60,
+      minutosFim % 60,
+    );
+
+    if (inicio != null && fim.isBefore(inicio)) {
+      fim = fim.add(const Duration(days: 1));
+    }
+
+    return fim;
+  }
+
+  DateTime? parseDataPtBr(String data) {
+    final parts = data.trim().split('/');
+    if (parts.length < 3) return null;
+
+    final dia = int.tryParse(parts[0]);
+    final mes = int.tryParse(parts[1]);
+    final ano = int.tryParse(parts[2]);
+
+    if (dia == null || mes == null || ano == null) return null;
+    return DateTime(ano, mes, dia);
+  }
+
+  String? primeiroHorarioValido(List<String?> valores) {
+    for (final valor in valores) {
+      final texto = (valor ?? '').trim();
+      if (texto.isEmpty) continue;
+      if (parseHoraMinuto(texto) != null) return texto;
+    }
+    return null;
+  }
+
+  int extrairOffsetDias(String horario) {
+    final match = RegExp(r'\+\s*(\d+)').firstMatch(horario);
+    if (match == null) return 0;
+    return int.tryParse(match.group(1) ?? '0') ?? 0;
+  }
+
+  Map<String, List<Map<String, String>>> agruparEventosPorData(List<Map<String, String>> eventos) {
+    final grupos = <String, List<Map<String, String>>>{};
+
+    for (final event in eventos) {
+      final data = (event['data'] ?? '').isEmpty ? 'Sem data' : event['data']!;
+      grupos.putIfAbsent(data, () => []);
+      grupos[data]!.add(event);
+    }
+
+    return grupos;
+  }
+
+  String calcularHorasVooFormatadas() {
+    int totalMinutos = 0;
+
+    for (final event in escalaEventos) {
+      if ((event['tipo'] ?? '').toUpperCase() != 'VOO') continue;
+      final saida = event['saida'] ?? '';
+      final chegada = event['chegada'] ?? '';
+      totalMinutos += diferencaMinutos(saida, chegada);
+    }
+
+    final horas = totalMinutos ~/ 60;
+    final minutos = totalMinutos % 60;
+    return '$horas:${minutos.toString().padLeft(2, '0')}';
+  }
+
+  int diferencaMinutos(String inicio, String fim) {
+    final a = parseHoraMinuto(inicio);
+    final b = parseHoraMinuto(fim);
+    if (a == null || b == null) return 0;
+
+    var diff = b - a;
+    if (diff < 0) diff += 24 * 60;
+    return diff;
+  }
+
+  int? parseHoraMinuto(String text) {
+    final clean = text.replaceAll(RegExp(r'\(.*?\)'), '').trim();
+    final parts = clean.split(':');
+    if (parts.length < 2) return null;
+
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return h * 60 + m;
+  }
+
+  String mesReferenciaEscala() {
+    for (final event in escalaEventos) {
+      final data = event['data'] ?? '';
+      final parts = data.split('/');
+      if (parts.length >= 3) {
+        return '${nomeMesLongo(parts[1])} ${parts[2]}';
+      }
+    }
+    return 'Escala mensal';
+  }
+
+  String formatarNumeroInteiro(int value) {
+    final s = value.toString();
+    final buffer = StringBuffer();
+    var count = 0;
+    for (var i = s.length - 1; i >= 0; i--) {
+      buffer.write(s[i]);
+      count++;
+      if (count == 3 && i != 0) {
+        buffer.write('.');
+        count = 0;
+      }
+    }
+    return buffer.toString().split('').reversed.join();
+  }
+
+  String nomeMesCurto(String mes) {
+    switch (mes.padLeft(2, '0')) {
+      case '01':
+        return 'JAN';
+      case '02':
+        return 'FEV';
+      case '03':
+        return 'MAR';
+      case '04':
+        return 'ABR';
+      case '05':
+        return 'MAI';
+      case '06':
+        return 'JUN';
+      case '07':
+        return 'JUL';
+      case '08':
+        return 'AGO';
+      case '09':
+        return 'SET';
+      case '10':
+        return 'OUT';
+      case '11':
+        return 'NOV';
+      case '12':
+        return 'DEZ';
+      default:
+        return mes.toUpperCase();
+    }
+  }
+
+  String nomeMesLongo(String mes) {
+    switch (mes.padLeft(2, '0')) {
+      case '01':
+        return 'Janeiro';
+      case '02':
+        return 'Fevereiro';
+      case '03':
+        return 'Março';
+      case '04':
+        return 'Abril';
+      case '05':
+        return 'Maio';
+      case '06':
+        return 'Junho';
+      case '07':
+        return 'Julho';
+      case '08':
+        return 'Agosto';
+      case '09':
+        return 'Setembro';
+      case '10':
+        return 'Outubro';
+      case '11':
+        return 'Novembro';
+      case '12':
+        return 'Dezembro';
+      default:
+        return mes;
+    }
+  }
+
+  String diaSemanaCurto(String data) {
+    final parts = data.split('/');
+    if (parts.length < 3) return '';
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final year = int.tryParse(parts[2]);
+    if (day == null || month == null || year == null) return '';
+
+    final weekDay = DateTime(year, month, day).weekday;
+    switch (weekDay) {
+      case 1:
+        return 'SEG';
+      case 2:
+        return 'TER';
+      case 3:
+        return 'QUA';
+      case 4:
+        return 'QUI';
+      case 5:
+        return 'SEX';
+      case 6:
+        return 'SÁB';
+      case 7:
+        return 'DOM';
+      default:
+        return '';
+    }
+  }
+
+
+  Widget buildJornadaPage() {
+    final calc = calcularJornadaManual();
+    final aviso = !jornadaAclimatado
+        ? 'Cálculo exibido com base aclimatada por enquanto. A opção não aclimatado ficará preparada para uma etapa futura.'
+        : jornadaTripulacao != 'Simples'
+            ? 'Cálculo exibido para tripulação simples por enquanto. Composta e revezamento ficarão preparadas para a próxima fase.'
+            : 'Cálculo pela Tabela B.1 para tripulação simples aclimatada.';
+
+    return buildPageShell(
+      title: 'Jornada',
+      subtitle: 'Calcule limite de jornada, horário de término e corte dos motores.',
+      icon: Icons.timer_outlined,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isMobile = constraints.maxWidth < 760;
+          return ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              Container(
+                padding: EdgeInsets.all(isMobile ? 18 : 24),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF020817), Color(0xFF071A34), Color(0xFF031024)],
+                  ),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: AppColors.blue.withValues(alpha: 0.20)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.18),
+                      blurRadius: 26,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: AppColors.blue.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.cyan.withValues(alpha: 0.28)),
+                          ),
+                          child: const Icon(Icons.timer_outlined, color: AppColors.cyan, size: 26),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Calculadora de Jornada',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: isMobile ? 23 : 30,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -0.4,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                aviso,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.64),
+                                  fontSize: isMobile ? 12 : 14,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 14,
+                      children: [
+                        SizedBox(
+                          width: isMobile ? double.infinity : 260,
+                          child: buildJornadaSwitchCard(),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 260,
+                          child: buildJornadaDropdown<String>(
+                            label: 'Fuso da apresentação',
+                            icon: Icons.public_outlined,
+                            value: jornadaFusoApresentacao,
+                            items: fusosBrasil.keys.toList(),
+                            onChanged: (value) => setState(() => jornadaFusoApresentacao = value ?? jornadaFusoApresentacao),
+                          ),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 260,
+                          child: buildJornadaDropdown<String>(
+                            label: 'Fuso do último destino',
+                            icon: Icons.place_outlined,
+                            value: jornadaFusoUltimoDestino,
+                            items: fusosBrasil.keys.toList(),
+                            onChanged: (value) => setState(() => jornadaFusoUltimoDestino = value ?? jornadaFusoUltimoDestino),
+                          ),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 260,
+                          child: buildJornadaDropdown<String>(
+                            label: 'Tipo de tripulação',
+                            icon: Icons.groups_2_outlined,
+                            value: jornadaTripulacao,
+                            items: const ['Simples', 'Composta', 'Revezamento'],
+                            onChanged: (value) => setState(() => jornadaTripulacao = value ?? jornadaTripulacao),
+                          ),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 220,
+                          child: buildJornadaDropdown<int>(
+                            label: 'Etapas / voos',
+                            icon: Icons.flight_takeoff_outlined,
+                            value: jornadaEtapas,
+                            items: const [1, 2, 3, 4, 5, 6, 7, 8],
+                            formatter: (value) => value >= 7 ? '7+ etapas' : '$value etapa${value == 1 ? '' : 's'}',
+                            onChanged: (value) => setState(() => jornadaEtapas = value ?? jornadaEtapas),
+                          ),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 220,
+                          child: buildHorarioApresentacaoCard(),
+                        ),
+                        SizedBox(
+                          width: isMobile ? double.infinity : 360,
+                          child: buildExtensaoJornadaCard(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    buildJornadaResultado(calc, isMobile: isMobile),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              buildTabelaB1Visual(),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Map<String, int> get fusosBrasil => const {
+        'Fernando de Noronha (UTC-2)': -2,
+        'Brasília (UTC-3)': -3,
+        'Amazonas (UTC-4)': -4,
+        'Acre (UTC-5)': -5,
+      };
+
+  Widget buildJornadaSwitchCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: jornadaInputDecoration(),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.blue.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.access_time_filled_outlined, color: AppColors.cyan, size: 20),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Aclimatado',
+              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+            ),
+          ),
+          Switch(
+            value: jornadaAclimatado,
+            activeColor: AppColors.cyan,
+            onChanged: (value) => setState(() => jornadaAclimatado = value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildHorarioApresentacaoCard() {
+    return InkWell(
+      borderRadius: BorderRadius.circular(22),
+      onTap: escolherHorarioApresentacao,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: jornadaInputDecoration(),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.blue.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.schedule_outlined, color: AppColors.cyan, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Apresentação',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.60), fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    formatarTimeOfDay(jornadaApresentacao),
+                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.keyboard_arrow_down, color: Colors.white54),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildExtensaoJornadaCard() {
+    final minutos = jornadaMinutosExcedidos.round();
+    final descanso = calcularDescansoMinimoMinutos();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: jornadaInputDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF6B21A).withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.more_time_outlined, color: Color(0xFFF6B21A), size: 20),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Extensão de jornada',
+                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                ),
+              ),
+              Switch(
+                value: jornadaHouveExtensao,
+                activeColor: const Color(0xFFF6B21A),
+                onChanged: (value) => setState(() {
+                  jornadaHouveExtensao = value;
+                  if (!value) jornadaMinutosExcedidos = 0;
+                }),
+              ),
+            ],
+          ),
+          if (jornadaHouveExtensao) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  'Minutos excedidos',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.62), fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+                const Spacer(),
+                Text(
+                  '$minutos min',
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900),
+                ),
+              ],
+            ),
+            Slider(
+              value: jornadaMinutosExcedidos,
+              min: 0,
+              max: 60,
+              divisions: 60,
+              activeColor: const Color(0xFFF6B21A),
+              inactiveColor: Colors.white.withValues(alpha: 0.18),
+              label: '$minutos min',
+              onChanged: (value) => setState(() => jornadaMinutosExcedidos = value),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.hotel_outlined, color: Colors.white.withValues(alpha: 0.70), size: 17),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Descanso mínimo: ${formatarMinutosComoDuracao(descanso)}',
+                      style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              'Regra aplicada: 12h + dobro dos minutos excedidos.',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.50), fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Text(
+              'Sem extensão: descanso mínimo base de 12h.',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> escolherHorarioApresentacao() async {
+    final horario = await showTimePicker(
+      context: context,
+      initialTime: jornadaApresentacao,
+      helpText: 'Horário de apresentação',
+      cancelText: 'Cancelar',
+      confirmText: 'OK',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: AppColors.cyan,
+              onPrimary: AppColors.navy,
+              surface: AppColors.navy2,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (horario != null) {
+      setState(() => jornadaApresentacao = horario);
+    }
+  }
+
+  Widget buildJornadaDropdown<T>({
+    required String label,
+    required IconData icon,
+    required T value,
+    required List<T> items,
+    required ValueChanged<T?> onChanged,
+    String Function(T value)? formatter,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: jornadaInputDecoration(),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.blue.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: AppColors.cyan, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<T>(
+                value: value,
+                isExpanded: true,
+                dropdownColor: AppColors.navy2,
+                iconEnabledColor: Colors.white70,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                items: items.map((item) {
+                  return DropdownMenuItem<T>(
+                    value: item,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.48), fontSize: 10, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(formatter?.call(item) ?? item.toString(), overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                selectedItemBuilder: (context) {
+                  return items.map((item) {
+                    return Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 3),
+                        Text(
+                          formatter?.call(item) ?? item.toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                        ),
+                      ],
+                    );
+                  }).toList();
+                },
+                onChanged: onChanged,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration jornadaInputDecoration() {
+    return BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.075),
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+    );
+  }
+
+  Widget buildJornadaResultado(Map<String, dynamic> calc, {required bool isMobile}) {
+    final limiteJornada = calc['limite_jornada_texto'] as String;
+    final limiteVoo = calc['limite_voo_texto'] as String;
+    final termino = calc['termino_texto'] as String;
+    final corte = calc['corte_texto'] as String;
+    final faixa = calc['faixa'] as String;
+    final coluna = calc['coluna'] as String;
+    final fusoDestino = calc['fuso_destino'] as String;
+    final descansoMinimo = calc['descanso_minimo_texto'] as String;
+    final minutosExcedidos = calc['minutos_excedidos'] as int;
+
+    final cards = [
+      buildResultadoJornadaCard(Icons.timelapse_outlined, 'Limite de jornada', limiteJornada, 'Tabela B.1 • $faixa • $coluna', AppColors.blue),
+      buildResultadoJornadaCard(Icons.flight_land_outlined, 'Corte dos motores', corte, '30 min antes do término', const Color(0xFFF6B21A)),
+      buildResultadoJornadaCard(Icons.flag_outlined, 'Término da jornada', termino, 'Hora local: $fusoDestino', AppColors.green),
+      buildResultadoJornadaCard(Icons.flight_outlined, 'Limite de voo', limiteVoo, 'Tempo máximo de voo', AppColors.cyan),
+      buildResultadoJornadaCard(Icons.hotel_outlined, 'Descanso mínimo', descansoMinimo, minutosExcedidos > 0 ? '12h + 2 × $minutosExcedidos min' : 'Sem extensão de jornada', const Color(0xFF9AA7FF)),
+    ];
+
+    return Wrap(
+      spacing: 14,
+      runSpacing: 14,
+      children: cards.map((card) {
+        return SizedBox(
+          width: isMobile ? double.infinity : 260,
+          child: card,
+        );
+      }).toList(),
+    );
+  }
+
+  Widget buildResultadoJornadaCard(IconData icon, String label, String value, String subtitle, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(color: color.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12)),
+                child: Icon(icon, color: color, size: 19),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.70), fontSize: 12, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
+          const SizedBox(height: 5),
+          Text(subtitle, style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget buildTabelaB1Visual() {
+    final linhas = [
+      ['06:00–06:59', '11 (9)', '11 (9)', '10 (8)', '9 (8)', '9 (8)'],
+      ['07:00–07:59', '13 (9,5)', '12 (9)', '11 (9)', '10 (8)', '9 (8)'],
+      ['08:00–11:59', '13 (10)', '13 (9,5)', '12 (9)', '11 (9)', '10 (8)'],
+      ['12:00–13:59', '12 (9,5)', '12 (9)', '11 (9)', '10 (8)', '9 (8)'],
+      ['14:00–15:59', '11 (9)', '11 (9)', '10 (8)', '9 (8)', '9 (8)'],
+      ['16:00–17:59', '10 (8)', '10 (8)', '9 (8)', '9 (8)', '9 (8)'],
+      ['18:00–05:59', '9 (8)', '9 (8)', '9 (7)', '9 (7)', '9 (7)'],
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Tabela B.1 usada no cálculo', style: TextStyle(color: AppColors.navy, fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          const Text('O número fora dos parênteses é jornada máxima. O número entre parênteses é tempo máximo de voo.', style: TextStyle(color: Color(0xFF607086), fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor: WidgetStateProperty.all(const Color(0xFFEAF5FF)),
+              columns: const [
+                DataColumn(label: Text('Início')),
+                DataColumn(label: Text('1-2')),
+                DataColumn(label: Text('3-4')),
+                DataColumn(label: Text('5')),
+                DataColumn(label: Text('6')),
+                DataColumn(label: Text('7+')),
+              ],
+              rows: linhas.map((linha) {
+                return DataRow(cells: linha.map((cell) => DataCell(Text(cell, style: const TextStyle(fontWeight: FontWeight.w700)))).toList());
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int calcularDescansoMinimoMinutos() {
+    final excedidos = jornadaHouveExtensao ? jornadaMinutosExcedidos.round() : 0;
+    return (12 * 60) + (2 * excedidos);
+  }
+
+  Map<String, dynamic> calcularJornadaManual() {
+    final reportMin = jornadaApresentacao.hour * 60 + jornadaApresentacao.minute;
+    final row = linhaTabelaB1(reportMin);
+    final col = colunaTabelaB1(jornadaEtapas);
+    final valores = tabelaB1()[row]![col]!;
+
+    final limiteJornadaMin = (valores[0] * 60).round();
+    final limiteVooMin = (valores[1] * 60).round();
+
+    final offsetOrigem = fusosBrasil[jornadaFusoApresentacao] ?? -3;
+    final offsetDestino = fusosBrasil[jornadaFusoUltimoDestino] ?? -3;
+
+    final base = DateTime(2026, 1, 1, jornadaApresentacao.hour, jornadaApresentacao.minute);
+    final utcInicio = base.subtract(Duration(hours: offsetOrigem));
+    final utcTermino = utcInicio.add(Duration(minutes: limiteJornadaMin));
+    final terminoDestino = utcTermino.add(Duration(hours: offsetDestino));
+    final corteMotores = terminoDestino.subtract(const Duration(minutes: 30));
+
+    final descansoMinimoMin = calcularDescansoMinimoMinutos();
+
+    return {
+      'limite_jornada_min': limiteJornadaMin,
+      'limite_voo_min': limiteVooMin,
+      'limite_jornada_texto': formatarMinutosComoDuracao(limiteJornadaMin),
+      'limite_voo_texto': formatarMinutosComoDuracao(limiteVooMin),
+      'termino_texto': formatarHoraDateTime(terminoDestino),
+      'corte_texto': formatarHoraDateTime(corteMotores),
+      'faixa': row,
+      'coluna': col,
+      'fuso_destino': jornadaFusoUltimoDestino,
+      'descanso_minimo_min': descansoMinimoMin,
+      'descanso_minimo_texto': formatarMinutosComoDuracao(descansoMinimoMin),
+      'minutos_excedidos': jornadaHouveExtensao ? jornadaMinutosExcedidos.round() : 0,
+    };
+  }
+
+  String linhaTabelaB1(int minutoDia) {
+    if (minutoDia >= 6 * 60 && minutoDia <= 6 * 60 + 59) return '06:00–06:59';
+    if (minutoDia >= 7 * 60 && minutoDia <= 7 * 60 + 59) return '07:00–07:59';
+    if (minutoDia >= 8 * 60 && minutoDia <= 11 * 60 + 59) return '08:00–11:59';
+    if (minutoDia >= 12 * 60 && minutoDia <= 13 * 60 + 59) return '12:00–13:59';
+    if (minutoDia >= 14 * 60 && minutoDia <= 15 * 60 + 59) return '14:00–15:59';
+    if (minutoDia >= 16 * 60 && minutoDia <= 17 * 60 + 59) return '16:00–17:59';
+    return '18:00–05:59';
+  }
+
+  String colunaTabelaB1(int etapas) {
+    if (etapas <= 2) return '1-2';
+    if (etapas <= 4) return '3-4';
+    if (etapas == 5) return '5';
+    if (etapas == 6) return '6';
+    return '7+';
+  }
+
+  Map<String, Map<String, List<double>>> tabelaB1() {
+    return {
+      '06:00–06:59': {'1-2': [11, 9], '3-4': [11, 9], '5': [10, 8], '6': [9, 8], '7+': [9, 8]},
+      '07:00–07:59': {'1-2': [13, 9.5], '3-4': [12, 9], '5': [11, 9], '6': [10, 8], '7+': [9, 8]},
+      '08:00–11:59': {'1-2': [13, 10], '3-4': [13, 9.5], '5': [12, 9], '6': [11, 9], '7+': [10, 8]},
+      '12:00–13:59': {'1-2': [12, 9.5], '3-4': [12, 9], '5': [11, 9], '6': [10, 8], '7+': [9, 8]},
+      '14:00–15:59': {'1-2': [11, 9], '3-4': [11, 9], '5': [10, 8], '6': [9, 8], '7+': [9, 8]},
+      '16:00–17:59': {'1-2': [10, 8], '3-4': [10, 8], '5': [9, 8], '6': [9, 8], '7+': [9, 8]},
+      '18:00–05:59': {'1-2': [9, 8], '3-4': [9, 8], '5': [9, 7], '6': [9, 7], '7+': [9, 7]},
+    };
+  }
+
+  String formatarTimeOfDay(TimeOfDay t) {
+    return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  String formatarHoraDateTime(DateTime dt) {
+    final hora = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final diaOffset = dt.day - 1;
+    if (diaOffset <= 0) return hora;
+    return '$hora +$diaOffset';
+  }
+
+  String formatarHoraDateTimeComBase(DateTime dt, DateTime dataBase) {
+    final hora = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final base = DateTime(dataBase.year, dataBase.month, dataBase.day);
+    final atual = DateTime(dt.year, dt.month, dt.day);
+    final diaOffset = atual.difference(base).inDays;
+    if (diaOffset <= 0) return hora;
+    return '$hora +$diaOffset';
+  }
+
+  String formatarMinutosComoDuracao(int minutos) {
+    final h = minutos ~/ 60;
+    final m = minutos % 60;
+    if (m == 0) return '${h}h';
+    return '${h}h${m.toString().padLeft(2, '0')}';
+  }
+
+  Widget buildTabelaPage() {
+    return buildPageShell(
+      title: 'Tabela',
+      subtitle: selectedFileName == null ? 'Nenhuma escala importada.' : 'Visão técnica tipo Excel: $selectedFileName',
+      icon: Icons.table_chart_outlined,
       child: GlassCard(
         child: Padding(
           padding: const EdgeInsets.all(22),
           child: escalaEventos.isEmpty
               ? const Center(
                   child: Text(
-                    'Importe uma escala Excel para visualizar os eventos tratados.',
+                    'Importe uma escala Excel para visualizar a tabela técnica.',
                     style: TextStyle(color: Color(0xFF536273), fontWeight: FontWeight.w600),
                   ),
                 )
@@ -2422,7 +4643,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Crew 4U - Holerite</title>
+<title>Crew 4U - Salário</title>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
@@ -2457,7 +4678,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   <div class="header">
     <div class="logo"><span class="crew">crew</span><span class="four">4</span><span class="u">u</span></div>
     <div class="title">
-      <h1>Simulação de Holerite</h1>
+      <h1>Simulação de Salário</h1>
       <p>${esc(selectedCargo)} • ${esc(selectedFileName ?? '')}</p>
       <p>USD/BRL: ${esc(formatarDecimal(cotacaoDolar, casas: 4))}</p>
     </div>
