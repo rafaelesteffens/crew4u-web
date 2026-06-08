@@ -844,14 +844,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       Icon(
                         item['icon'] as IconData,
                         color: selected ? AppColors.cyan : inactive,
-                        size: 24,
+                        size: 27,
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 5),
                       Text(
                         item['label'] as String,
                         style: TextStyle(
                           color: selected ? AppColors.cyan : inactive,
-                          fontSize: 11,
+                          fontSize: 13,
                           fontWeight: selected
                               ? FontWeight.w900
                               : FontWeight.w700,
@@ -5023,28 +5023,28 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           ),
           buildEscalaMetricCard(
             icon: Icons.history_outlined,
-            title: '28 dias',
+            title: isMobile ? '28d' : '28 dias',
             value: horasUltimos28Dias,
             subtitle: 'voadas',
             compact: isCompact,
           ),
           buildEscalaMetricCard(
             icon: Icons.event_available_outlined,
-            title: 'Reservas',
+            title: isMobile ? 'Res.' : 'Reservas',
             value: reservas.toString(),
             subtitle: contexto,
             compact: isCompact,
           ),
           buildEscalaMetricCard(
             icon: Icons.notifications_active_outlined,
-            title: 'Sobreav.',
+            title: isMobile ? 'Sob.' : 'Sobreav.',
             value: sobreavisos.toString(),
             subtitle: contexto,
             compact: isCompact,
           ),
           buildEscalaMetricCard(
             icon: Icons.weekend_outlined,
-            title: 'Folgas',
+            title: isMobile ? 'Fol.' : 'Folgas',
             value: folgas.toString(),
             subtitle: contexto,
             compact: isCompact,
@@ -5072,7 +5072,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     bool compact = false,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [AppColors.navy, AppColors.navy2],
@@ -5093,15 +5093,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Row(
             children: [
               Container(
-                width: compact ? 18 : 20,
-                height: compact ? 18 : 20,
+                width: compact ? 21 : 22,
+                height: compact ? 21 : 22,
                 decoration: BoxDecoration(
                   color: AppColors.blue,
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: Icon(icon, color: Colors.white, size: compact ? 10 : 11),
+                child: Icon(icon, color: Colors.white, size: compact ? 12 : 13),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 5),
               Expanded(
                 child: Text(
                   title,
@@ -5109,34 +5109,34 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.72),
-                    fontSize: compact ? 8 : 9,
-                    fontWeight: FontWeight.w700,
+                    fontSize: compact ? 9 : 10,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 5),
           Text(
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Colors.white,
-              fontSize: compact ? 12 : 14,
+              fontSize: compact ? 15 : 16,
               fontWeight: FontWeight.w900,
               letterSpacing: 0,
             ),
           ),
-          const SizedBox(height: 1),
+          const SizedBox(height: 2),
           Text(
             subtitle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.55),
-              fontSize: compact ? 7 : 8,
-              fontWeight: FontWeight.w600,
+              fontSize: compact ? 8 : 9,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -5219,14 +5219,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         final isMobile = constraints.maxWidth < 620;
 
         final dateBox = SizedBox(
-          width: isMobile ? 44 : 62,
+          width: isMobile ? 48 : 62,
           child: Column(
             children: [
               Text(
                 semana,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.62),
-                  fontSize: isMobile ? 9 : 11,
+                  fontSize: isMobile ? 11 : 11,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -5234,7 +5234,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 dia,
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: isMobile ? 23 : 28,
+                  fontSize: isMobile ? 30 : 28,
                   fontWeight: FontWeight.w900,
                   letterSpacing: -1,
                 ),
@@ -5243,7 +5243,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 mes,
                 style: TextStyle(
                   color: AppColors.blue,
-                  fontSize: isMobile ? 10 : 12,
+                  fontSize: isMobile ? 13 : 12,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -5253,8 +5253,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
         return Container(
           key: escalaDiaKeys.putIfAbsent(data, () => GlobalKey()),
-          margin: const EdgeInsets.only(bottom: 7),
-          padding: EdgeInsets.all(isMobile ? 6 : 9),
+          margin: const EdgeInsets.only(bottom: 9),
+          padding: EdgeInsets.all(isMobile ? 7 : 9),
           decoration: BoxDecoration(
             color: const Color(0xFF071A34).withValues(alpha: 0.82),
             borderRadius: BorderRadius.circular(18),
@@ -5273,10 +5273,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               dateBox,
               Container(
                 width: 1,
-                height: (eventos.length * 46).clamp(46, 178).toDouble(),
+                height: (eventos.length * (isMobile ? 55 : 46))
+                    .clamp(52, isMobile ? 230 : 178)
+                    .toDouble(),
                 color: AppColors.blue.withValues(alpha: 0.24),
               ),
-              SizedBox(width: isMobile ? 6 : 9),
+              SizedBox(width: isMobile ? 8 : 9),
               Expanded(
                 child: Column(
                   children: buildEventosComApresentacao(
@@ -5470,8 +5472,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget buildDutyReportBanner(String dutyReport) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF0D223D),
         borderRadius: BorderRadius.circular(11),
@@ -5489,14 +5491,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                     const Icon(
                       Icons.login_outlined,
                       color: AppColors.cyan,
-                      size: 13,
+                      size: 15,
                     ),
-                    const SizedBox(width: 5),
+                    const SizedBox(width: 6),
                     const Text(
                       'Apresentação',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 10,
+                        fontSize: 13,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -5505,7 +5507,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       dutyReport,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 11,
+                        fontSize: 14,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -5517,13 +5519,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
           return Row(
             children: [
-              const Icon(Icons.login_outlined, color: AppColors.cyan, size: 14),
+              const Icon(Icons.login_outlined, color: AppColors.cyan, size: 16),
               const SizedBox(width: 6),
               const Text(
                 'Apresentação',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 10,
+                  fontSize: 13,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -5532,7 +5534,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 dutyReport,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 11,
+                  fontSize: 14,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -5548,28 +5550,35 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final termino = analise['termino_texto']?.toString() ?? '';
     if (termino.isEmpty) return const SizedBox.shrink();
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4, left: 4, right: 4),
-      child: Row(
-        children: [
-          Icon(
-            Icons.flag_outlined,
-            color: Colors.white.withValues(alpha: 0.58),
-            size: 12,
-          ),
-          const SizedBox(width: 5),
-          Expanded(
-            child: Text(
-              'De acordo com sua apresentação, sua jornada deve encerrar às $termino local.',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.72),
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 560;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4, top: 1),
+          child: Row(
+            children: [
+              Icon(
+                Icons.flag_outlined,
+                color: Colors.white.withValues(alpha: 0.62),
+                size: isMobile ? 15 : 12,
               ),
-            ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  isMobile
+                      ? 'Fim limite da jornada: $termino local.'
+                      : 'De acordo com sua apresentação, sua jornada deve encerrar às $termino local.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.76),
+                    fontSize: isMobile ? 12 : 9,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -5667,8 +5676,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
         final tag = Container(
           padding: EdgeInsets.symmetric(
-            horizontal: isMobile ? 6 : 8,
-            vertical: isMobile ? 4 : 5,
+            horizontal: isMobile ? 8 : 8,
+            vertical: isMobile ? 6 : 5,
           ),
           decoration: BoxDecoration(
             color: color.withValues(alpha: isSobreaviso ? 0.92 : 1),
@@ -5680,14 +5689,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: isMobile ? 12 : 14),
-              const SizedBox(width: 4),
+              Icon(icon, color: Colors.white, size: isMobile ? 15 : 14),
+              const SizedBox(width: 5),
               Text(
                 label,
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,
-                  fontSize: isMobile ? 10 : 11,
+                  fontSize: isMobile ? 13 : 11,
                 ),
               ),
             ],
@@ -5700,11 +5709,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 children: [
                   buildAirportTime(saida, origem, compact: isMobile),
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 5 : 9),
-                    child: const Icon(
+                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 6 : 9),
+                    child: Icon(
                       Icons.arrow_forward,
                       color: AppColors.blue,
-                      size: 18,
+                      size: isMobile ? 24 : 18,
                     ),
                   ),
                   buildAirportTime(chegada, destino, compact: isMobile),
@@ -5716,16 +5725,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: isMobile ? 11 : 13,
+                  fontSize: isMobile ? 15 : 13,
                   fontWeight: FontWeight.w800,
                 ),
               );
 
         final row = Container(
-          margin: const EdgeInsets.only(bottom: 4),
+          margin: const EdgeInsets.only(bottom: 6),
           padding: EdgeInsets.symmetric(
-            horizontal: isMobile ? 6 : 9,
-            vertical: isMobile ? 5 : 7,
+            horizontal: isMobile ? 8 : 9,
+            vertical: isMobile ? 8 : 7,
           ),
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.055),
@@ -5737,21 +5746,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     tag,
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 7),
                     SizedBox(
-                      width: 58,
+                      width: 72,
                       child: Text(
                         id,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 11,
+                          fontSize: 14,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),
                     if (duracaoTexto.isNotEmpty) ...[
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 5),
                       buildDurationChip(duracaoTexto, color, compact: true),
                     ],
                     Expanded(
@@ -6242,8 +6251,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget buildDurationChip(String text, Color color, {bool compact = false}) {
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? 5 : 7,
-        vertical: compact ? 2 : 3,
+        horizontal: compact ? 7 : 7,
+        vertical: compact ? 4 : 3,
       ),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
@@ -6256,15 +6265,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Icon(
             Icons.schedule,
             color: color.withValues(alpha: 0.92),
-            size: compact ? 10 : 11,
+            size: compact ? 13 : 11,
           ),
-          const SizedBox(width: 3),
+          const SizedBox(width: 4),
           Text(
             text,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.68),
-              fontSize: compact ? 9 : 10,
-              fontWeight: FontWeight.w700,
+              color: Colors.white.withValues(alpha: 0.78),
+              fontSize: compact ? 12 : 10,
+              fontWeight: FontWeight.w800,
               letterSpacing: 0.1,
             ),
           ),
@@ -6389,17 +6398,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         Text(
           time,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.58),
-            fontSize: compact ? 9 : 10,
-            fontWeight: FontWeight.w700,
+            color: Colors.white.withValues(alpha: 0.66),
+            fontSize: compact ? 12 : 10,
+            fontWeight: FontWeight.w800,
           ),
         ),
-        const SizedBox(height: 1),
+        const SizedBox(height: 2),
         Text(
           airport,
           style: TextStyle(
             color: Colors.white,
-            fontSize: compact ? 14 : 17,
+            fontSize: compact ? 18 : 17,
             fontWeight: FontWeight.w900,
             letterSpacing: -0.4,
           ),
