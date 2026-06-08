@@ -5872,9 +5872,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final destino = event['destino'] ?? '';
     final id = event['identificacao'] ?? '';
 
-    unawaited(atualizarMeteoVoo(event, origem: true));
-    unawaited(atualizarMeteoVoo(event, origem: false));
-
+    var meteoInicialSolicitada = false;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -5887,6 +5885,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 if (mounted) setModalState(() {});
               });
               setModalState(() {});
+            }
+
+            if (!meteoInicialSolicitada) {
+              meteoInicialSolicitada = true;
+              Future.microtask(() {
+                refreshMeteo(origem: true);
+                refreshMeteo(origem: false);
+              });
             }
 
             return DraggableScrollableSheet(
@@ -6101,52 +6107,150 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         toDouble(event[origem ? 'origem_lat' : 'destino_lat']) != 0 &&
         toDouble(event[origem ? 'origem_lon' : 'destino_lon']) != 0;
 
-    return buildFlightDetailCard(
-      icon: origem ? Icons.flight_takeoff_outlined : Icons.flight_land_outlined,
-      title: origem ? 'Origem • $codigo' : 'Destino • $codigo',
-      trailing: IconButton(
-        tooltip: 'Atualizar meteorologia',
-        onPressed: loading || !temCoordenada ? null : onRefresh,
-        icon: Icon(
-          loading ? Icons.sync : Icons.refresh,
-          color: loading || !temCoordenada ? Colors.white30 : AppColors.cyan,
+    final codigoMeteo = toDouble(meteo?['codigo']).round();
+    final descricao = meteo == null
+        ? loading
+              ? 'Atualizando'
+              : 'Aguardando'
+        : descricaoCodigoMeteo(codigoMeteo);
+    final temperatura = meteo == null
+        ? '--'
+        : formatarNumeroCurto(meteo['temperatura']);
+    final vento = meteo == null ? '--' : formatarNumeroCurto(meteo['vento']);
+    final atualizado = meteo?['atualizadoEm']?.toString() ?? '';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF123A63), Color(0xFF071A34)],
         ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.22),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: !temCoordenada
-          ? Text(
-              'Reimporte a escala para carregar coordenadas deste aeroporto e ativar a meteorologia.',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.70),
-                fontWeight: FontWeight.w700,
-              ),
-            )
-          : meteo == null
-          ? Text(
-              loading ? 'Atualizando condições...' : 'Toque em atualizar.',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.70),
-                fontWeight: FontWeight.w700,
-              ),
-            )
-          : Wrap(
-              spacing: 8,
-              runSpacing: 8,
+          ? Row(
               children: [
-                buildMeteoChip(
-                  Icons.thermostat_outlined,
-                  '${formatarNumeroCurto(meteo['temperatura'])} °C',
+                const Icon(Icons.cloud_off_outlined, color: Colors.white70),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Reimporte a escala para carregar coordenadas deste aeroporto.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
-                buildMeteoChip(
-                  Icons.air_outlined,
-                  '${formatarNumeroCurto(meteo['vento'])} km/h',
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      origem
+                          ? Icons.flight_takeoff_outlined
+                          : Icons.flight_land_outlined,
+                      color: Colors.white.withValues(alpha: 0.82),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        origem ? 'Origem • $codigo' : 'Destino • $codigo',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.78),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: loading ? null : onRefresh,
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.cyan,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: Icon(
+                        loading ? Icons.sync : Icons.refresh,
+                        size: 15,
+                      ),
+                      label: const Text(
+                        'Atualizar',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                buildMeteoChip(
-                  Icons.cloud_outlined,
-                  descricaoCodigoMeteo(toDouble(meteo['codigo']).round()),
-                ),
-                buildMeteoChip(
-                  Icons.update_outlined,
-                  meteo['atualizadoEm']?.toString() ?? '',
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Icon(
+                      iconeCodigoMeteo(codigoMeteo),
+                      color: Colors.white,
+                      size: 42,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '$temperatura°',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 38,
+                        height: 0.9,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -1,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              descricao,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Vento $vento km/h${atualizado.isEmpty ? '' : ' • $atualizado'}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.66),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -6298,6 +6402,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     if ([71, 73, 75, 77, 85, 86].contains(codigo)) return 'Neve';
     if ([95, 96, 99].contains(codigo)) return 'Temporal';
     return 'Condição $codigo';
+  }
+
+  IconData iconeCodigoMeteo(int codigo) {
+    if (codigo < 0) return Icons.cloud_queue_outlined;
+    if (codigo == 0) return Icons.wb_sunny_outlined;
+    if ([1, 2, 3].contains(codigo)) return Icons.wb_cloudy_outlined;
+    if ([45, 48].contains(codigo)) return Icons.foggy;
+    if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].contains(codigo)) {
+      return Icons.water_drop_outlined;
+    }
+    if ([71, 73, 75, 77, 85, 86].contains(codigo)) {
+      return Icons.ac_unit_outlined;
+    }
+    if ([95, 96, 99].contains(codigo)) return Icons.thunderstorm_outlined;
+    return Icons.cloud_outlined;
   }
 
   Widget buildDurationChip(String text, Color color, {bool compact = false}) {
@@ -9061,23 +9180,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
         parts.add(eventHtml(event));
 
-        final fimDaJornada =
-            tipo == 'VOO' &&
-            dutyAtivo != null &&
-            !existeVooPosteriorNaMesmaJornada(eventos, globalIndex, dutyAtivo);
-        if (fimDaJornada) {
-          final analise = calcularLimiteJornadaDaEscala(
-            eventos,
-            indiceInicioJornadaPorDuty(eventos, globalIndex, dutyAtivo),
-            dutyAtivo,
-          );
-          final termino = analise['termino_texto']?.toString() ?? '';
-          if (termino.isNotEmpty) {
-            parts.add(
-              '<div class="report end"><b>Limite da jornada</b><span>${esc(termino)}</span></div>',
-            );
-          }
-        }
+        dutyAtivo;
       }
 
       return parts.join();
@@ -9117,7 +9220,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final diariasBrl = formatarMoeda(financeiro['total_diarias_brl'], 'BRL');
     final diariasUsd = formatarMoeda(financeiro['total_diarias_usd'], 'USD');
     final periodo = mesReferenciaEscala();
-    final arquivo = selectedFileName ?? 'Escala importada';
 
     String stat(String label, String value) {
       return '<div class="stat"><span>${esc(label)}</span><b>${esc(value)}</b></div>';
@@ -9142,9 +9244,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final bodyMargin = compact ? '0 auto' : '0';
       final eventCols = compact ? '1fr' : '1.08fr 1fr .72fr';
       final eventGap = compact ? '4px' : '10px';
-      final eventFont = compact ? '14px' : '12px';
-      final dateWidth = compact ? '58px' : '70px';
-      final dayPadding = compact ? '10px' : '12px';
+      final eventFont = compact ? '12px' : '11px';
+      final dateWidth = compact ? '52px' : '66px';
+      final dayPadding = compact ? '8px' : '11px';
 
       return '''
 <!doctype html>
@@ -9167,27 +9269,27 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     width: $bodyWidth;
     margin: $bodyMargin;
     min-height: 100vh;
-    padding: ${compact ? '14px 12px 22px' : '0'};
+    padding: ${compact ? '11px 10px 18px' : '0'};
     background: $bg;
   }
   .hero {
     color: white;
     background: $headerBg;
     border-radius: ${compact ? '22px' : '24px'};
-    padding: ${compact ? '18px' : '22px'};
-    margin-bottom: 12px;
+    padding: ${compact ? '13px' : '20px'};
+    margin-bottom: 10px;
     box-shadow: 0 16px 36px rgba(0,0,0,.18);
   }
   .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .logo { font-size: ${compact ? '25px' : '31px'}; font-weight: 300; letter-spacing: -2px; line-height: 1; }
-  .logo span { color: #128DFF; font-size: ${compact ? '39px' : '48px'}; font-weight: 200; margin: 0 -4px; text-shadow: 0 0 16px rgba(24,200,255,.60); }
+  .logo { font-size: ${compact ? '20px' : '31px'}; font-weight: 300; letter-spacing: -2px; line-height: 1; }
+  .logo span { color: #128DFF; font-size: ${compact ? '31px' : '48px'}; font-weight: 200; margin: 0 -4px; text-shadow: 0 0 16px rgba(24,200,255,.60); }
   .period { color: #BFEAFF; font-size: ${compact ? '12px' : '13px'}; font-weight: 900; text-align: right; }
-  h1 { margin: 14px 0 4px; font-size: ${compact ? '25px' : '28px'}; letter-spacing: -.5px; }
+  h1 { margin: 9px 0 3px; font-size: ${compact ? '21px' : '28px'}; letter-spacing: -.5px; }
   .meta { margin: 0; color: rgba(255,255,255,.68); font-size: ${compact ? '11px' : '12px'}; font-weight: 800; line-height: 1.35; }
   .section-title {
-    margin: 16px 0 8px;
+    margin: 12px 0 7px;
     color: $fg;
-    font-size: ${compact ? '18px' : '17px'};
+    font-size: ${compact ? '16px' : '17px'};
     font-weight: 900;
     letter-spacing: -.2px;
   }
@@ -9195,16 +9297,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     display: grid;
     grid-template-columns: ${compact ? 'repeat(3, 1fr)' : 'repeat(6, 1fr)'};
     gap: ${compact ? '7px' : '9px'};
-    margin: 12px 0 0;
+    margin: 10px 0 0;
   }
   .stat {
     background: rgba(255,255,255,.10);
     border: 1px solid rgba(255,255,255,.12);
-    border-radius: 14px;
-    padding: ${compact ? '10px 8px' : '11px'};
+    border-radius: 12px;
+    padding: ${compact ? '8px 7px' : '11px'};
   }
   .stat span { display: block; color: rgba(255,255,255,.62); font-size: 9px; font-weight: 900; text-transform: uppercase; }
-  .stat b { display: block; margin-top: 5px; font-size: ${compact ? '16px' : '17px'}; color: white; }
+  .stat b { display: block; margin-top: 4px; font-size: ${compact ? '14px' : '17px'}; color: white; }
   .executive {
     display: grid;
     grid-template-columns: ${compact ? '1fr' : '1fr 1fr 1fr'};
@@ -9226,44 +9328,44 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     gap: 10px;
     background: $panel;
     border: 1px solid $border;
-    border-radius: 20px;
+    border-radius: 16px;
     padding: $dayPadding;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     break-inside: avoid;
   }
   .datebox {
     border-right: 1px solid ${dark ? 'rgba(18,141,255,.30)' : '#CFE2F7'};
     text-align: center;
-    padding-right: 8px;
+    padding-right: 7px;
   }
-  .datebox span { display: block; color: $muted; font-size: 11px; font-weight: 900; }
-  .datebox strong { display: block; color: $fg; font-size: ${compact ? '34px' : '31px'}; line-height: 1; margin: 5px 0; }
-  .datebox small { display: block; color: #128DFF; font-size: 12px; font-weight: 900; }
+  .datebox span { display: block; color: $muted; font-size: ${compact ? '9px' : '11px'}; font-weight: 900; }
+  .datebox strong { display: block; color: $fg; font-size: ${compact ? '28px' : '31px'}; line-height: 1; margin: 4px 0; }
+  .datebox small { display: block; color: #128DFF; font-size: ${compact ? '10px' : '12px'}; font-weight: 900; }
   .report {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    margin-bottom: 8px;
-    padding: ${compact ? '9px 10px' : '8px 11px'};
-    border-radius: 13px;
+    margin-bottom: 6px;
+    padding: ${compact ? '6px 8px' : '8px 11px'};
+    border-radius: 11px;
     background: $reportBg;
     color: $reportFg;
     border: 1px solid ${dark ? 'rgba(24,200,255,.22)' : '#B9DAFF'};
-    font-size: ${compact ? '13px' : '11px'};
+    font-size: ${compact ? '11px' : '11px'};
     font-weight: 900;
   }
-  .report span { color: $fg; font-size: ${compact ? '16px' : '14px'}; }
+  .report span { color: $fg; font-size: ${compact ? '13px' : '14px'}; }
   .event {
     display: grid;
     grid-template-columns: $eventCols;
     gap: $eventGap;
     align-items: center;
-    padding: ${compact ? '10px 11px' : '9px 12px'};
-    margin-bottom: 7px;
+    padding: ${compact ? '7px 8px' : '9px 12px'};
+    margin-bottom: 6px;
     background: ${dark ? 'rgba(255,255,255,.060)' : '#F8FBFF'};
     border: 1px solid ${dark ? 'rgba(255,255,255,.085)' : '#E3ECF6'};
-    border-radius: 15px;
+    border-radius: 12px;
     font-size: $eventFont;
     line-height: 1.18;
   }
@@ -9272,24 +9374,24 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
-    padding: ${compact ? '6px 9px' : '5px 8px'};
+    padding: ${compact ? '4px 7px' : '5px 8px'};
     color: white;
-    font-size: ${compact ? '12px' : '10px'};
+    font-size: ${compact ? '10px' : '10px'};
     font-weight: 900;
     white-space: nowrap;
   }
-  .event strong { color: $fg; font-size: ${compact ? '14px' : '12px'}; }
+  .event strong { color: $fg; font-size: ${compact ? '12px' : '12px'}; }
   .duration {
     border: 1px solid ${dark ? 'rgba(18,141,255,.35)' : '#B8D7F8'};
     color: $muted;
     border-radius: 999px;
-    padding: 3px 7px;
-    font-size: ${compact ? '11px' : '10px'};
+    padding: 2px 6px;
+    font-size: ${compact ? '9px' : '10px'};
     font-weight: 900;
     white-space: nowrap;
   }
-  .route { color: $fg; font-size: ${compact ? '20px' : '13px'}; font-weight: 900; letter-spacing: -.3px; }
-  .time { color: $muted; font-size: ${compact ? '13px' : '11px'}; font-weight: 900; text-align: ${compact ? 'left' : 'right'}; }
+  .route { color: $fg; font-size: ${compact ? '17px' : '13px'}; font-weight: 900; letter-spacing: -.3px; }
+  .time { color: $muted; font-size: ${compact ? '11px' : '11px'}; font-weight: 900; text-align: ${compact ? 'left' : 'right'}; }
   .voo .pill { background: #128DFF; }
   .reserva .pill { background: #E53935; }
   .sobreaviso .pill { background: #F6B21A; }
@@ -9316,8 +9418,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         <div class="logo">crew<span>4</span>u</div>
         <div class="period">${esc(periodo)}</div>
       </div>
-      <h1>Relatório de Escala</h1>
-      <p class="meta">${esc(arquivo)}<br>${esc(selectedCargo)} • Gerado no Crew 4U</p>
+      <h1>Escala detalhada</h1>
+      <p class="meta">${esc(selectedCargo)} • ${esc(periodo)}</p>
       <section class="stats">
         ${stat('Horas', horasVoo)}
         ${stat('KM', kmTotal)}
@@ -9328,13 +9430,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       </section>
     </header>
 
-    <h2 class="section-title">Resumo executivo</h2>
-    <section class="executive">
-      <div class="info-card"><span>Salário líquido estimado</span><b>${esc(formatarMoeda(salario['salario_liquido'], 'BRL'))}</b></div>
-      <div class="info-card"><span>Diárias BRL</span><b>${esc(diariasBrl)}</b></div>
-      <div class="info-card"><span>Diárias USD</span><b>${esc(diariasUsd)}</b></div>
-    </section>
-
     <h2 class="section-title">Escala detalhada</h2>
     <section class="days">$dias</section>
 
@@ -9342,6 +9437,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     <section class="calc">
       <div class="info-card"><span>Proventos estimados</span><b>${esc(formatarMoeda(salario['proventos'], 'BRL'))}</b></div>
       <div class="info-card"><span>Descontos estimados</span><b>-${esc(formatarMoeda(salario['descontos'], 'BRL'))}</b></div>
+      <div class="info-card"><span>Diárias BRL</span><b>${esc(diariasBrl)}</b></div>
+      <div class="info-card"><span>Diárias USD</span><b>${esc(diariasUsd)}</b></div>
       <div class="info-card"><span>KM diurno</span><b>${esc(formatarNumeroInteiro(financeiro['km_diurno'] ?? 0))}</b></div>
       <div class="info-card"><span>KM noturno/fim de semana</span><b>${esc(formatarNumeroInteiro((financeiro['km_noturno'] ?? 0) + (financeiro['km_fim_semana'] ?? 0) + (financeiro['km_fim_semana_noturno'] ?? 0)))}</b></div>
     </section>
