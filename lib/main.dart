@@ -1,10 +1,19 @@
+// ignore_for_file: use_build_context_synchronously
 
+import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+
+import 'platform/platform_document.dart';
+import 'platform/platform_storage.dart';
+
+const backendBaseUrl = String.fromEnvironment(
+  'CREW4U_API_BASE_URL',
+  defaultValue: 'https://crew4u-api.onrender.com',
+);
 
 void main() {
   runApp(const CrewForYouApp());
@@ -18,11 +27,21 @@ class CrewForYouApp extends StatelessWidget {
     return MaterialApp(
       title: 'Crew 4U',
       debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.system,
       theme: ThemeData(
         useMaterial3: true,
         fontFamily: 'Arial',
         scaffoldBackgroundColor: AppColors.bg,
         colorScheme: ColorScheme.fromSeed(seedColor: AppColors.blue),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        fontFamily: 'Arial',
+        scaffoldBackgroundColor: AppColors.navy,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.blue,
+          brightness: Brightness.dark,
+        ),
       ),
       home: const CrewForYouHomePage(),
     );
@@ -66,6 +85,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   bool resumoEscalaAberto = false;
   final Map<String, GlobalKey> escalaDiaKeys = {};
   String? ultimaDataAutoScrollEscala;
+  String? escalaMesResumoKey;
+  final ScrollController escalaScrollController = ScrollController();
+  final ScrollController salarioScrollController = ScrollController();
+  final ScrollController jornadaScrollController = ScrollController();
+  final ScrollController tabelaHorizontalScrollController = ScrollController();
+  final ScrollController tabelaVerticalScrollController = ScrollController();
+  final PlatformStorage storage = const PlatformStorage();
+  final PlatformDocumentService documentService =
+      const PlatformDocumentService();
 
   bool jornadaAclimatado = true;
   String jornadaFusoApresentacao = 'Brasília (UTC-3)';
@@ -99,6 +127,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   List<Map<String, String>> escalaEventos = [];
   List<Map<String, dynamic>> historicoImportacoes = [];
   List<Map<String, dynamic>> aeroportosLocais = [];
+  Map<String, Map<String, dynamic>> escalaHistoricoMensal = {};
+  String? selectedEscalaMesKey;
+  String selectedEscalaTipo = 'executada';
+  Map<String, Map<String, dynamic>> meteoCache = {};
+  Set<String> meteoLoadingKeys = {};
 
   Map<String, dynamic> resumo = resumoVazio();
 
@@ -160,19 +193,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   @override
   void dispose() {
+    escalaScrollController.dispose();
+    salarioScrollController.dispose();
+    jornadaScrollController.dispose();
+    tabelaHorizontalScrollController.dispose();
+    tabelaVerticalScrollController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    carregarConfiguracoesLocais();
-    carregarUltimaEscalaLocal();
+    unawaited(inicializarDadosLocais());
     carregarCotacaoDolar();
   }
 
-  void carregarConfiguracoesLocais() {
-    final raw = html.window.localStorage['crew4u_config'];
+  Future<void> inicializarDadosLocais() async {
+    await carregarConfiguracoesLocais();
+    await carregarHistoricoEscalasLocal();
+    await carregarUltimaEscalaLocal();
+    selectedIndex = 0;
+    escalaPeriodo = 'Mês';
+    ultimaDataAutoScrollEscala = null;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> carregarConfiguracoesLocais() async {
+    final raw = await storage.read('crew4u_config');
     if (raw == null || raw.isEmpty) return;
 
     try {
@@ -205,14 +252,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       'aeroportosLocais': aeroportosLocais,
     };
 
-    html.window.localStorage['crew4u_config'] = jsonEncode(payload);
+    unawaited(storage.write('crew4u_config', jsonEncode(payload)));
     showSnack('Configurações salvas no navegador.');
   }
 
-
-
-  void carregarUltimaEscalaLocal() {
-    final raw = html.window.localStorage['crew4u_last_roster'];
+  Future<void> carregarUltimaEscalaLocal() async {
+    final raw = await storage.read('crew4u_last_roster');
     if (raw == null || raw.isEmpty) return;
 
     try {
@@ -226,6 +271,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       selectedFileName = decoded['selectedFileName']?.toString();
       selectedSheetName = decoded['selectedSheetName']?.toString();
       selectedCargo = decoded['selectedCargo']?.toString() ?? selectedCargo;
+      selectedEscalaMesKey = decoded['selectedEscalaMesKey']?.toString();
+      selectedEscalaTipo =
+          decoded['selectedEscalaTipo']?.toString() ?? selectedEscalaTipo;
       resumo = toStringDynamicMap(decoded['resumo']);
       if (resumo.isEmpty) resumo = resumoVazio();
       escalaEventos = eventos;
@@ -233,7 +281,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         importStatus = 'Última escala restaurada do navegador.';
       }
     } catch (_) {
-      html.window.localStorage.remove('crew4u_last_roster');
+      unawaited(storage.remove('crew4u_last_roster'));
     }
   }
 
@@ -242,12 +290,178 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       'selectedFileName': selectedFileName,
       'selectedSheetName': selectedSheetName,
       'selectedCargo': selectedCargo,
+      'selectedEscalaMesKey': selectedEscalaMesKey,
+      'selectedEscalaTipo': selectedEscalaTipo,
       'resumo': resumo,
       'escalaEventos': escalaEventos,
       'savedAt': DateTime.now().toIso8601String(),
     };
 
-    html.window.localStorage['crew4u_last_roster'] = jsonEncode(payload);
+    unawaited(storage.write('crew4u_last_roster', jsonEncode(payload)));
+  }
+
+  Future<void> carregarHistoricoEscalasLocal() async {
+    final raw = await storage.read('crew4u_roster_history_v1');
+    if (raw == null || raw.isEmpty) return;
+
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      escalaHistoricoMensal = decoded.map(
+        (mes, value) => MapEntry(mes, toStringDynamicMap(value)),
+      );
+    } catch (_) {
+      unawaited(storage.remove('crew4u_roster_history_v1'));
+    }
+  }
+
+  void salvarHistoricoEscalasLocal() {
+    unawaited(
+      storage.write(
+        'crew4u_roster_history_v1',
+        jsonEncode(escalaHistoricoMensal),
+      ),
+    );
+  }
+
+  void salvarEscalaNoHistoricoMensal(
+    String filename,
+    String sheetName,
+    List<Map<String, String>> eventos,
+    Map<String, dynamic> resumoImportado,
+  ) {
+    final mesKey = mesKeyDosEventos(eventos);
+    if (mesKey == null) return;
+
+    final mes = Map<String, dynamic>.from(
+      escalaHistoricoMensal[mesKey] ?? <String, dynamic>{},
+    );
+    final tipo = mes['planejada'] == null ? 'planejada' : 'executada';
+    final eventosAtuais = escalaEventos;
+    final resumoAtual = resumo;
+    escalaEventos = eventos;
+    resumo = resumoImportado;
+    final holerite = calcularHoleriteLocal();
+    escalaEventos = eventosAtuais;
+    resumo = resumoAtual;
+    final salario = toStringDynamicMap(holerite['salario']);
+
+    mes[tipo] = {
+      'selectedFileName': filename,
+      'selectedSheetName': sheetName,
+      'selectedCargo': selectedCargo,
+      'resumo': resumoImportado,
+      'escalaEventos': eventos,
+      'salarioLiquido': salario['salario_liquido'],
+      'savedAt': DateTime.now().toIso8601String(),
+    };
+
+    escalaHistoricoMensal[mesKey] = mes;
+    limitarHistoricoEscalasASeisMeses();
+
+    setState(() {
+      selectedEscalaMesKey = mesKey;
+      selectedEscalaTipo = tipo;
+      importStatus = tipo == 'planejada'
+          ? 'Escala salva como Planejada de ${labelMesKey(mesKey)}.'
+          : 'Escala salva como Executada de ${labelMesKey(mesKey)}.';
+    });
+
+    salvarHistoricoEscalasLocal();
+  }
+
+  void limitarHistoricoEscalasASeisMeses() {
+    final keys = escalaHistoricoMensal.keys.toList()..sort();
+    while (keys.length > 6) {
+      final removida = keys.removeAt(0);
+      escalaHistoricoMensal.remove(removida);
+    }
+  }
+
+  String? mesKeyDosEventos(List<Map<String, String>> eventos) {
+    for (final event in eventos) {
+      final data = parseDataPtBr(event['data'] ?? '');
+      if (data != null) {
+        return '${data.year}-${data.month.toString().padLeft(2, '0')}';
+      }
+    }
+    return null;
+  }
+
+  List<String> mesesHistoricoOrdenados() {
+    final keys = escalaHistoricoMensal.keys.toList()..sort();
+    return keys.reversed.toList();
+  }
+
+  String labelMesKey(String mesKey) {
+    final parts = mesKey.split('-');
+    if (parts.length != 2) return mesKey;
+    final mes = int.tryParse(parts[1]);
+    final ano = parts[0];
+    if (mes == null) return mesKey;
+    return '${nomeMesCurto(mes.toString().padLeft(2, '0'))}/$ano';
+  }
+
+  void selecionarEscalaHistorico(String mesKey, String tipo) {
+    final mes = escalaHistoricoMensal[mesKey];
+    final registro = toStringDynamicMap(mes?[tipo]);
+    if (registro.isEmpty) return;
+
+    final eventosRaw = registro['escalaEventos'] as List<dynamic>? ?? [];
+    final eventos = eventosRaw.map<Map<String, String>>((item) {
+      final map = toStringDynamicMap(item);
+      return map.map((key, value) => MapEntry(key, value?.toString() ?? ''));
+    }).toList();
+
+    setState(() {
+      selectedEscalaMesKey = mesKey;
+      selectedEscalaTipo = tipo;
+      selectedFileName = registro['selectedFileName']?.toString();
+      selectedSheetName = registro['selectedSheetName']?.toString();
+      selectedCargo = registro['selectedCargo']?.toString() ?? selectedCargo;
+      resumo = toStringDynamicMap(registro['resumo']);
+      if (resumo.isEmpty) resumo = resumoVazio();
+      escalaEventos = eventos;
+      ultimaDataAutoScrollEscala = null;
+      escalaDiaKeys.clear();
+      importStatus =
+          '${labelTipoEscala(tipo)} carregada de ${labelMesKey(mesKey)}.';
+    });
+
+    salvarUltimaEscalaLocal();
+  }
+
+  String labelTipoEscala(String tipo) {
+    return tipo == 'planejada' ? 'Planejada' : 'Executada';
+  }
+
+  void preservarEscalaAtualAntesDeUpload() {
+    if (escalaEventos.isEmpty) return;
+    final mesKey = mesKeyDosEventos(escalaEventos);
+    if (mesKey == null) return;
+
+    final mes = Map<String, dynamic>.from(
+      escalaHistoricoMensal[mesKey] ?? <String, dynamic>{},
+    );
+    final tipo = selectedEscalaTipo == 'executada' && mes['planejada'] != null
+        ? 'executada'
+        : 'planejada';
+
+    if (mes[tipo] != null) return;
+
+    final holerite = calcularHoleriteLocal();
+    final salario = toStringDynamicMap(holerite['salario']);
+    mes[tipo] = {
+      'selectedFileName': selectedFileName,
+      'selectedSheetName': selectedSheetName,
+      'selectedCargo': selectedCargo,
+      'resumo': resumo,
+      'escalaEventos': escalaEventos,
+      'salarioLiquido': salario['salario_liquido'],
+      'savedAt': DateTime.now().toIso8601String(),
+    };
+    escalaHistoricoMensal[mesKey] = mes;
+    limitarHistoricoEscalasASeisMeses();
+    salvarHistoricoEscalasLocal();
   }
 
   Future<void> carregarCotacaoDolar() async {
@@ -257,7 +471,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     });
 
     try {
-      final uri = Uri.parse('https://economia.awesomeapi.com.br/json/last/USD-BRL');
+      final uri = Uri.parse(
+        'https://economia.awesomeapi.com.br/json/last/USD-BRL',
+      );
       final response = await http.get(uri).timeout(const Duration(seconds: 8));
 
       if (response.statusCode != 200) {
@@ -300,6 +516,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final file = await openFile(acceptedTypeGroups: [typeGroup]);
     if (file == null) return;
 
+    preservarEscalaAtualAntesDeUpload();
+
     setState(() {
       selectedFileName = file.name;
       selectedSheetName = null;
@@ -314,7 +532,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse('https://crew4u-api.onrender.com/upload-escala'),
+        Uri.parse('$backendBaseUrl/upload-escala'),
       );
 
       request.fields['cargo'] = selectedCargo;
@@ -327,7 +545,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode != 200) {
-        throw Exception('Backend retornou erro ${response.statusCode}: ${response.body}');
+        throw Exception(
+          'Backend retornou erro ${response.statusCode}: ${response.body}',
+        );
       }
 
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
@@ -345,8 +565,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           'identificacao': map['identificacao']?.toString() ?? '',
           'pairing': map['pairing']?.toString() ?? '',
           'origem': map['origem']?.toString() ?? '',
+          'origem_lat': map['origem_lat']?.toString() ?? '',
+          'origem_lon': map['origem_lon']?.toString() ?? '',
           'saida': map['saida']?.toString() ?? '',
           'destino': map['destino']?.toString() ?? '',
+          'destino_lat': map['destino_lat']?.toString() ?? '',
+          'destino_lon': map['destino_lon']?.toString() ?? '',
           'chegada': map['chegada']?.toString() ?? '',
           'duty_report': map['duty_report']?.toString() ?? '',
           'duty_debrief': map['duty_debrief']?.toString() ?? '',
@@ -354,7 +578,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           'km_diurno': map['km_diurno']?.toString() ?? '',
           'km_noturno': map['km_noturno']?.toString() ?? '',
           'km_fim_semana': map['km_fim_semana']?.toString() ?? '',
-          'km_fim_semana_noturno': map['km_fim_semana_noturno']?.toString() ?? '',
+          'km_fim_semana_noturno':
+              map['km_fim_semana_noturno']?.toString() ?? '',
           'cafe': map['cafe']?.toString() ?? '',
           'almoco': map['almoco']?.toString() ?? '',
           'jantar': map['jantar']?.toString() ?? '',
@@ -370,13 +595,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         selectedSheetName = sheetName;
         escalaEventos = eventos;
         resumo = rawSummary;
-        importStatus = 'Arquivo lido com sucesso. ${eventos.length} eventos tratados encontrados.';
+        importStatus =
+            'Arquivo lido com sucesso. ${eventos.length} eventos tratados encontrados.';
         selectedIndex = 0;
         ultimaDataAutoScrollEscala = null;
         escalaDiaKeys.clear();
         isLoading = false;
       });
 
+      salvarEscalaNoHistoricoMensal(filename, sheetName, eventos, rawSummary);
       salvarUltimaEscalaLocal();
       registrarHistorico(filename);
     } catch (error) {
@@ -425,6 +652,28 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return double.tryParse(value.toString().replaceAll(',', '.')) ?? 0;
   }
 
+  void selecionarAba(int pageIndex) {
+    setState(() => selectedIndex = pageIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = switch (pageIndex) {
+        1 => salarioScrollController,
+        3 => jornadaScrollController,
+        _ => null,
+      };
+      if (controller?.hasClients == true) {
+        controller!.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (pageIndex == 0) {
+        ultimaDataAutoScrollEscala = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
@@ -432,69 +681,73 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       buildHoleritePage(),
       buildTabelaPage(),
       buildJornadaPage(),
-      buildConfigPage(),
+      buildProfilePage(),
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isMobile = constraints.maxWidth < 760;
-
-        if (isMobile) {
-          return Scaffold(
-            backgroundColor: AppColors.navy,
-            body: pages[selectedIndex],
-            bottomNavigationBar: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                buildMobileQuickActions(),
-                buildBottomNavBar(),
-              ],
-            ),
-          );
-        }
-
         return Scaffold(
-          body: Row(
+          backgroundColor: AppColors.navy,
+          body: Stack(
             children: [
-              buildSidebar(),
-              Expanded(child: pages[selectedIndex]),
+              pages[selectedIndex],
+              buildMobileFloatingAction(
+                alignment: Alignment.bottomLeft,
+                icon: Icons.upload_file_outlined,
+                tooltip: isLoading
+                    ? 'Processando escala...'
+                    : 'Importar escala',
+                onTap: isLoading ? null : pickExcelFile,
+              ),
+              buildMobileFloatingAction(
+                alignment: Alignment.bottomRight,
+                icon: Icons.share_outlined,
+                tooltip: 'Compartilhar escala em PDF',
+                onTap: escalaEventos.isEmpty ? null : abrirOpcoesExportarEscala,
+              ),
             ],
           ),
+          bottomNavigationBar: buildBottomNavBar(),
         );
       },
     );
   }
 
+  Widget buildMobileFloatingAction({
+    required Alignment alignment,
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
+    final isLeft = alignment == Alignment.bottomLeft;
 
-
-  Widget buildMobileQuickActions() {
-    return Container(
-      color: AppColors.navy,
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          buildRoundActionButton(
-            icon: Icons.upload_file_outlined,
-            tooltip: isLoading ? 'Processando escala...' : 'Importar escala',
-            onTap: isLoading ? null : pickExcelFile,
-          ),
-          const SizedBox(width: 12),
-          buildRoundActionButton(
-            icon: Icons.share_outlined,
-            tooltip: 'Compartilhar escala em PDF',
-            onTap: escalaEventos.isEmpty ? null : imprimirPdfEscala,
-          ),
-        ],
+    return Positioned(
+      left: isLeft ? 18 : null,
+      right: isLeft ? null : 18,
+      bottom: 16,
+      child: SafeArea(
+        child: buildRoundActionButton(
+          icon: icon,
+          tooltip: tooltip,
+          onTap: onTap,
+        ),
       ),
     );
   }
 
-  Widget buildBottomActionButton({required IconData icon, required String label, required VoidCallback? onTap}) {
+  Widget buildBottomActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
     return buildRoundActionButton(icon: icon, tooltip: label, onTap: onTap);
   }
 
-  Widget buildRoundActionButton({required IconData icon, required String tooltip, required VoidCallback? onTap}) {
+  Widget buildRoundActionButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
     final enabled = onTap != null;
     return Tooltip(
       message: tooltip,
@@ -506,33 +759,55 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           height: 42,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: enabled ? const LinearGradient(colors: [AppColors.blue, AppColors.cyan]) : null,
+            gradient: enabled
+                ? const LinearGradient(colors: [AppColors.blue, AppColors.cyan])
+                : null,
             color: enabled ? null : Colors.white.withValues(alpha: 0.08),
-            border: Border.all(color: enabled ? Colors.white.withValues(alpha: 0.10) : Colors.white.withValues(alpha: 0.14)),
-            boxShadow: enabled ? [BoxShadow(color: AppColors.blue.withValues(alpha: 0.22), blurRadius: 14, offset: const Offset(0, 6))] : [],
+            border: Border.all(
+              color: enabled
+                  ? Colors.white.withValues(alpha: 0.10)
+                  : Colors.white.withValues(alpha: 0.14),
+            ),
+            boxShadow: enabled
+                ? [
+                    BoxShadow(
+                      color: AppColors.blue.withValues(alpha: 0.22),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : [],
           ),
-          child: Icon(icon, color: enabled ? Colors.white : Colors.white38, size: 19),
+          child: Icon(
+            icon,
+            color: enabled ? Colors.white : Colors.white38,
+            size: 19,
+          ),
         ),
       ),
     );
   }
 
   Widget buildBottomNavBar() {
-    final items = [
-      {'icon': Icons.flight_takeoff_outlined, 'label': 'Escala'},
-      {'icon': Icons.payments_outlined, 'label': 'Salário'},
-      {'icon': Icons.table_chart_outlined, 'label': 'Tabela'},
-      {'icon': Icons.timer_outlined, 'label': 'Jornada'},
-      {'icon': Icons.person_outline, 'label': 'Perfil'},
-    ];
+    final items = navigationItems();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final background = isDark ? AppColors.navy : Colors.white;
+    final inactive = isDark
+        ? Colors.white54
+        : AppColors.navy.withValues(alpha: 0.54);
+    final activeBackground = AppColors.blue.withValues(
+      alpha: isDark ? 0.16 : 0.12,
+    );
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.navy,
-        border: Border(top: BorderSide(color: AppColors.blue.withValues(alpha: 0.25))),
+        color: background,
+        border: Border(
+          top: BorderSide(color: AppColors.blue.withValues(alpha: 0.18)),
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.28),
+            color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.10),
             blurRadius: 20,
             offset: const Offset(0, -6),
           ),
@@ -543,33 +818,37 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         top: false,
         child: Row(
           children: List.generate(items.length, (index) {
-            final selected = selectedIndex == index;
+            final item = items[index];
+            final pageIndex = item['index'] as int;
+            final selected = selectedIndex == pageIndex;
             return Expanded(
               child: InkWell(
                 borderRadius: BorderRadius.circular(18),
-                onTap: () => setState(() => selectedIndex = index),
+                onTap: () => selecionarAba(pageIndex),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   decoration: BoxDecoration(
-                    color: selected ? AppColors.blue.withValues(alpha: 0.16) : Colors.transparent,
+                    color: selected ? activeBackground : Colors.transparent,
                     borderRadius: BorderRadius.circular(18),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        items[index]['icon'] as IconData,
-                        color: selected ? AppColors.cyan : Colors.white54,
+                        item['icon'] as IconData,
+                        color: selected ? AppColors.cyan : inactive,
                         size: 24,
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        items[index]['label'] as String,
+                        item['label'] as String,
                         style: TextStyle(
-                          color: selected ? AppColors.cyan : Colors.white54,
+                          color: selected ? AppColors.cyan : inactive,
                           fontSize: 11,
-                          fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                          fontWeight: selected
+                              ? FontWeight.w900
+                              : FontWeight.w700,
                         ),
                       ),
                     ],
@@ -584,6 +863,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildSidebar() {
+    final items = navigationItems();
+
     return Container(
       width: 106,
       decoration: const BoxDecoration(
@@ -601,11 +882,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           const SizedBox(height: 18),
           buildMiniLogo(),
           const SizedBox(height: 20),
-          buildNavButton(0, Icons.flight_takeoff_outlined, 'Escala'),
-          buildNavButton(1, Icons.payments_outlined, 'Salário'),
-          buildNavButton(2, Icons.table_chart_outlined, 'Tabela'),
-          buildNavButton(3, Icons.timer_outlined, 'Jornada'),
-          buildNavButton(4, Icons.person_outline, 'Perfil'),
+          ...items.map((item) {
+            return buildNavButton(
+              item['index'] as int,
+              item['icon'] as IconData,
+              item['label'] as String,
+            );
+          }),
           const Spacer(),
           buildSidebarActionButton(
             tooltip: 'Importar escala',
@@ -616,7 +899,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           buildSidebarActionButton(
             tooltip: 'Compartilhar escala em PDF',
             icon: Icons.share_outlined,
-            onTap: escalaEventos.isEmpty ? null : imprimirPdfEscala,
+            onTap: escalaEventos.isEmpty ? null : abrirOpcoesExportarEscala,
           ),
           const SizedBox(height: 10),
           Padding(
@@ -635,7 +918,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  Widget buildSidebarActionButton({required String tooltip, required IconData icon, required VoidCallback? onTap}) {
+  List<Map<String, Object>> navigationItems() {
+    return <Map<String, Object>>[
+      {'index': 0, 'icon': Icons.flight_takeoff_outlined, 'label': 'Escala'},
+      {'index': 1, 'icon': Icons.payments_outlined, 'label': 'Salário'},
+      {'index': 2, 'icon': Icons.table_chart_outlined, 'label': 'Tabela'},
+      {'index': 3, 'icon': Icons.timer_outlined, 'label': 'Jornada'},
+      {'index': 4, 'icon': Icons.person_outline, 'label': 'Perfil'},
+    ];
+  }
+
+  Widget buildSidebarActionButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
     final enabled = onTap != null;
     return Tooltip(
       message: tooltip,
@@ -646,11 +943,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           width: 48,
           height: 42,
           decoration: BoxDecoration(
-            color: enabled ? AppColors.blue.withValues(alpha: 0.16) : Colors.white.withValues(alpha: 0.05),
+            color: enabled
+                ? AppColors.blue.withValues(alpha: 0.16)
+                : Colors.white.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: enabled ? AppColors.blue.withValues(alpha: 0.42) : Colors.white.withValues(alpha: 0.08)),
+            border: Border.all(
+              color: enabled
+                  ? AppColors.blue.withValues(alpha: 0.42)
+                  : Colors.white.withValues(alpha: 0.08),
+            ),
           ),
-          child: Icon(icon, color: enabled ? AppColors.cyan : Colors.white30, size: 21),
+          child: Icon(
+            icon,
+            color: enabled ? AppColors.cyan : Colors.white30,
+            size: 21,
+          ),
         ),
       ),
     );
@@ -660,45 +967,28 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return Column(
       children: [
         Container(
-          width: 58,
-          height: 58,
+          width: 70,
+          height: 46,
           decoration: BoxDecoration(
-            color: AppColors.navy2,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppColors.blue.withValues(alpha: 0.55)),
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
             boxShadow: [
               BoxShadow(
-                color: AppColors.blue.withValues(alpha: 0.20),
-                blurRadius: 24,
+                color: AppColors.blue.withValues(alpha: 0.08),
+                blurRadius: 16,
               ),
             ],
           ),
-          child: Center(
-            child: Text(
-              '4',
-              style: TextStyle(
-                fontSize: 40,
-                height: 1,
-                color: AppColors.blue,
-                fontWeight: FontWeight.w300,
-                shadows: [
-                  Shadow(
-                    color: AppColors.cyan.withValues(alpha: 0.65),
-                    blurRadius: 14,
-                  )
-                ],
-              ),
+          child: Padding(
+            padding: const EdgeInsets.all(5),
+            child: Image.asset(
+              'assets/logo_crew4u.png',
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return buildTextLogo(fontSize: 16, fourSize: 26, dark: false);
+              },
             ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'crew4u',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w800,
-            fontSize: 12,
-            letterSpacing: 0.5,
           ),
         ),
       ],
@@ -715,13 +1005,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: selected ? AppColors.blue.withValues(alpha: 0.16) : Colors.transparent,
+          color: selected
+              ? AppColors.blue.withValues(alpha: 0.16)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
-          border: selected ? Border.all(color: AppColors.blue.withValues(alpha: 0.45)) : null,
+          border: selected
+              ? Border.all(color: AppColors.blue.withValues(alpha: 0.45))
+              : null,
         ),
         child: Column(
           children: [
-            Icon(icon, color: selected ? AppColors.cyan : Colors.white70, size: 24),
+            Icon(
+              icon,
+              color: selected ? AppColors.cyan : Colors.white70,
+              size: 24,
+            ),
             const SizedBox(height: 5),
             Text(
               label,
@@ -744,6 +1042,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     required Widget child,
   }) {
     final isEscala = title == 'Escala';
+    final isSalary = title == 'Salário';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -757,18 +1057,37 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: isEscala
-                  ? const [Color(0xFF030B18), Color(0xFF071A34), Color(0xFF020713)]
+                  ? const [
+                      Color(0xFF030B18),
+                      Color(0xFF071A34),
+                      Color(0xFF020713),
+                    ]
+                  : isSalary && isDark
+                  ? const [
+                      Color(0xFF030B18),
+                      Color(0xFF071A34),
+                      Color(0xFF020713),
+                    ]
                   : const [Color(0xFFF7FBFF), Color(0xFFEAF2FB)],
             ),
           ),
           child: SafeArea(
             bottom: false,
             child: Padding(
-              padding: EdgeInsets.fromLTRB(horizontalPadding, verticalPadding, horizontalPadding, isMobile ? 8 : verticalPadding),
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                verticalPadding,
+                horizontalPadding,
+                isMobile ? 8 : verticalPadding,
+              ),
               child: Column(
                 children: [
-                  if (!(isMobile && isEscala)) ...[
-                    buildPageHeader(title: title, subtitle: subtitle, icon: icon),
+                  if (!isEscala) ...[
+                    buildPageHeader(
+                      title: title,
+                      subtitle: subtitle,
+                      icon: icon,
+                    ),
                     SizedBox(height: isMobile ? 14 : 22),
                   ],
                   Expanded(child: child),
@@ -793,7 +1112,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         return Container(
           padding: EdgeInsets.all(isMobile ? 14 : 16),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
+            gradient: const LinearGradient(
+              colors: [AppColors.navy, AppColors.navy2],
+            ),
             borderRadius: BorderRadius.circular(isMobile ? 24 : 24),
             border: Border.all(color: AppColors.blue.withValues(alpha: 0.18)),
             boxShadow: [
@@ -801,7 +1122,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 color: Colors.black.withValues(alpha: 0.22),
                 blurRadius: 24,
                 offset: const Offset(0, 10),
-              )
+              ),
             ],
           ),
           child: isMobile
@@ -816,12 +1137,20 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                           decoration: BoxDecoration(
                             color: AppColors.blue.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.blue.withValues(alpha: 0.35)),
+                            border: Border.all(
+                              color: AppColors.blue.withValues(alpha: 0.35),
+                            ),
                           ),
                           child: Icon(icon, color: AppColors.cyan, size: 26),
                         ),
                         const SizedBox(width: 12),
-                        Expanded(child: buildHeaderTitleText(title, subtitle, mobile: true)),
+                        Expanded(
+                          child: buildHeaderTitleText(
+                            title,
+                            subtitle,
+                            mobile: true,
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 0),
@@ -835,7 +1164,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       decoration: BoxDecoration(
                         color: AppColors.blue.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(17),
-                        border: Border.all(color: AppColors.blue.withValues(alpha: 0.35)),
+                        border: Border.all(
+                          color: AppColors.blue.withValues(alpha: 0.35),
+                        ),
                       ),
                       child: Icon(icon, color: AppColors.cyan, size: 26),
                     ),
@@ -849,7 +1180,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  Widget buildHeaderTitleText(String title, String subtitle, {bool mobile = false}) {
+  Widget buildHeaderTitleText(
+    String title,
+    String subtitle, {
+    bool mobile = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -896,12 +1231,19 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.cyan,
+                  ),
                 ),
                 SizedBox(width: 8),
                 Text(
                   'Importando...',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -913,7 +1255,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [AppColors.blue, AppColors.cyan]),
+                gradient: const LinearGradient(
+                  colors: [AppColors.blue, AppColors.cyan],
+                ),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -925,20 +1269,25 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               ),
               child: const Row(
                 children: [
-                  Icon(Icons.upload_file_outlined, color: Colors.white, size: 18),
+                  Icon(
+                    Icons.upload_file_outlined,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                   SizedBox(width: 8),
                   Text(
                     'Upload',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-        if (!compact) ...[
-          const SizedBox(width: 16),
-          buildTopBrand(),
-        ],
+        if (!compact) ...[const SizedBox(width: 16), buildTopBrand()],
       ],
     );
   }
@@ -970,50 +1319,61 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 980),
-          child: GlassCard(
-            child: Padding(
-              padding: const EdgeInsets.all(38),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  buildHeroLogo(),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      buildCargoSelectorLarge(),
-                      const SizedBox(width: 16),
-                      buildInfoPill(Icons.lock_outline, 'Cálculo local'),
-                      const SizedBox(width: 10),
-                      buildInfoPill(Icons.auto_graph, 'Análise automática'),
-                    ],
-                  ),
-                  const SizedBox(height: 26),
-                  const Text(
-                    'Importe sua escala em Excel para iniciar a análise de KM, jornada, diárias, descontos e salário líquido.',
-                    style: TextStyle(fontSize: 16, color: Color(0xFF4E5B6D), height: 1.4),
-                  ),
-                  const SizedBox(height: 26),
-                  Row(
-                    children: [
-                      PrimaryButton(
-                        icon: isLoading ? Icons.hourglass_top : Icons.upload_file,
-                        label: isLoading ? 'Processando...' : 'Importar escala Excel',
-                        onTap: isLoading ? null : pickExcelFile,
+            child: GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.all(38),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    buildHeroLogo(),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        buildCargoSelectorLarge(),
+                        const SizedBox(width: 16),
+                        buildInfoPill(Icons.lock_outline, 'Cálculo local'),
+                        const SizedBox(width: 10),
+                        buildInfoPill(Icons.auto_graph, 'Análise automática'),
+                      ],
+                    ),
+                    const SizedBox(height: 26),
+                    const Text(
+                      'Importe sua escala em Excel para iniciar a análise de KM, jornada, diárias, descontos e salário líquido.',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Color(0xFF4E5B6D),
+                        height: 1.4,
                       ),
-                      const SizedBox(width: 12),
-                      SecondaryButton(
-                        icon: Icons.settings_outlined,
-                        label: 'Configurações',
-                        onTap: () => setState(() => selectedIndex = 3),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  if (selectedFileName != null) buildStatusBox() else buildEmptyUploadBox(),
-                ],
+                    ),
+                    const SizedBox(height: 26),
+                    Row(
+                      children: [
+                        PrimaryButton(
+                          icon: isLoading
+                              ? Icons.hourglass_top
+                              : Icons.upload_file,
+                          label: isLoading
+                              ? 'Processando...'
+                              : 'Importar escala Excel',
+                          onTap: isLoading ? null : pickExcelFile,
+                        ),
+                        const SizedBox(width: 12),
+                        SecondaryButton(
+                          icon: Icons.settings_outlined,
+                          label: 'Configurações',
+                          onTap: () => setState(() => selectedIndex = 3),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    if (selectedFileName != null)
+                      buildStatusBox()
+                    else
+                      buildEmptyUploadBox(),
+                  ],
+                ),
               ),
-            ),
             ),
           ),
         ),
@@ -1082,7 +1442,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             letterSpacing: -7,
             color: AppColors.blue,
             shadows: [
-              Shadow(color: AppColors.blue.withValues(alpha: 0.55), blurRadius: 18),
+              Shadow(
+                color: AppColors.blue.withValues(alpha: 0.55),
+                blurRadius: 18,
+              ),
             ],
           ),
         ),
@@ -1103,7 +1466,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('Cargo:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+        const Text(
+          'Cargo:',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        ),
         const SizedBox(width: 14),
         buildModernDropdown<String>(
           value: selectedCargo,
@@ -1163,7 +1529,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         children: [
           Icon(Icons.info_outline, color: AppColors.blue),
           SizedBox(width: 12),
-          Text('Nenhum arquivo selecionado.', style: TextStyle(color: Color(0xFF536273))),
+          Text(
+            'Nenhum arquivo selecionado.',
+            style: TextStyle(color: Color(0xFF536273)),
+          ),
         ],
       ),
     );
@@ -1175,30 +1544,52 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isError ? Colors.red.withValues(alpha: 0.06) : Colors.green.withValues(alpha: 0.06),
+        color: isError
+            ? Colors.red.withValues(alpha: 0.06)
+            : Colors.green.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isError ? Colors.red.withValues(alpha: 0.25) : Colors.green.withValues(alpha: 0.25),
+          color: isError
+              ? Colors.red.withValues(alpha: 0.25)
+              : Colors.green.withValues(alpha: 0.25),
         ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(isError ? Icons.error_outline : Icons.check_circle_outline,
-              color: isError ? Colors.red : Colors.green.shade700),
+          Icon(
+            isError ? Icons.error_outline : Icons.check_circle_outline,
+            color: isError ? Colors.red : Colors.green.shade700,
+          ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Arquivo selecionado: $selectedFileName', style: const TextStyle(fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (selectedSheetName != null) ...[
-                const SizedBox(height: 8),
-                Text('Aba lida: $selectedSheetName', maxLines: 1, overflow: TextOverflow.ellipsis),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Arquivo selecionado: $selectedFileName',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (selectedSheetName != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Aba lida: $selectedSheetName',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (importStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    importStatus!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ],
-              if (importStatus != null) ...[
-                const SizedBox(height: 8),
-                Text(importStatus!, maxLines: 2, overflow: TextOverflow.ellipsis),
-              ],
-            ]),
+            ),
           ),
         ],
       ),
@@ -1208,20 +1599,37 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget buildHoleritePage() {
     final diarias = toStringDynamicMap(resumo['diarias']);
     final holerite = calcularHoleriteLocal();
-    final salario = toStringDynamicMap(holerite['salario']);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return buildPageShell(
       title: 'Salário',
-      subtitle: selectedFileName == null ? 'Importe uma escala para começar.' : '$selectedCargo • $selectedFileName',
+      subtitle: selectedFileName == null
+          ? 'Importe uma escala para começar.'
+          : '$selectedCargo • $selectedFileName',
       icon: Icons.payments_outlined,
       child: ListView(
+        controller: salarioScrollController,
         padding: EdgeInsets.zero,
         children: [
-          buildProfessionalHeader(salario),
-          const SizedBox(height: 22),
-          GlassCard(
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.navy : AppColors.panel,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.10)
+                    : AppColors.line,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.navy.withValues(alpha: isDark ? 0.18 : 0.06),
+                  blurRadius: 24,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
             child: Padding(
-              padding: const EdgeInsets.all(26),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1234,8 +1642,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           ),
           const SizedBox(height: 22),
           buildValidatorSection(),
-          const SizedBox(height: 22),
-          buildHistorySection(),
           const SizedBox(height: 22),
           buildDiariasResumoSection(diarias),
         ],
@@ -1250,11 +1656,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < 760;
-        final metrics = [
-          buildHeaderMetric('Proventos', formatarMoeda(salario['proventos'], 'BRL'), compact: isMobile),
-          buildHeaderMetric('Descontos', '-${formatarMoeda(salario['descontos'], 'BRL')}', compact: isMobile),
-          buildHeaderMetric('Líquido', formatarMoeda(salario['salario_liquido'], 'BRL'), highlight: true, compact: isMobile),
-        ];
 
         final titleBlock = Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1265,9 +1666,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               decoration: BoxDecoration(
                 color: AppColors.blue.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.blue.withValues(alpha: 0.40)),
+                border: Border.all(
+                  color: AppColors.blue.withValues(alpha: 0.40),
+                ),
               ),
-              child: Icon(Icons.payments_outlined, color: AppColors.cyan, size: isMobile ? 25 : 30),
+              child: Icon(
+                Icons.payments_outlined,
+                color: AppColors.cyan,
+                size: isMobile ? 25 : 30,
+              ),
             ),
             SizedBox(width: isMobile ? 12 : 18),
             Expanded(
@@ -1287,7 +1694,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   ),
                   const SizedBox(height: 7),
                   Text(
-                    selectedFileName == null ? 'Importe uma escala para gerar a simulação.' : '$selectedCargo • $selectedFileName',
+                    selectedFileName == null
+                        ? 'Importe uma escala para gerar a simulação.'
+                        : '$selectedCargo • $selectedFileName',
                     maxLines: isMobile ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1302,13 +1711,38 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text('USD/BRL:', style: TextStyle(color: Colors.white.withValues(alpha: 0.70), fontSize: 12, fontWeight: FontWeight.bold)),
-                      Text(formatarDecimal(cotacaoDolar, casas: 4), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900)),
+                      Text(
+                        'USD/BRL:',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.70),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        formatarDecimal(cotacaoDolar, casas: 4),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       InkWell(
                         onTap: carregarCotacaoDolar,
-                        child: Icon(carregandoCotacao ? Icons.sync : Icons.refresh, color: AppColors.cyan, size: 17),
+                        child: Icon(
+                          carregandoCotacao ? Icons.sync : Icons.refresh,
+                          color: AppColors.cyan,
+                          size: 17,
+                        ),
                       ),
-                      Text('Diárias exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}', style: TextStyle(color: Colors.white.withValues(alpha: 0.70), fontSize: 12, fontWeight: FontWeight.bold)),
+                      Text(
+                        'Diárias exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.70),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -1320,7 +1754,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         return Container(
           padding: EdgeInsets.all(isMobile ? 18 : 26),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
+            gradient: const LinearGradient(
+              colors: [AppColors.navy, AppColors.navy2],
+            ),
             borderRadius: BorderRadius.circular(30),
             boxShadow: [
               BoxShadow(
@@ -1330,84 +1766,102 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               ),
             ],
           ),
-          child: isMobile
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    titleBlock,
-                    const SizedBox(height: 16),
-                    Wrap(spacing: 8, runSpacing: 8, children: metrics),
-                  ],
-                )
-              : Row(
-                  children: [
-                    Expanded(child: titleBlock),
-                    const SizedBox(width: 18),
-                    ...metrics.expand((w) => [w, const SizedBox(width: 10)]).toList()..removeLast(),
-                  ],
-                ),
+          child: titleBlock,
         );
       },
     );
   }
 
-  Widget buildHeaderMetric(String title, String value, {bool highlight = false, bool compact = false}) {
+  Widget buildHeaderMetric(
+    String title,
+    String value, {
+    bool highlight = false,
+    bool compact = false,
+  }) {
     return Container(
       width: compact ? 112 : 172,
-      padding: EdgeInsets.symmetric(horizontal: compact ? 11 : 15, vertical: compact ? 12 : 16),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 11 : 15,
+        vertical: compact ? 12 : 16,
+      ),
       decoration: BoxDecoration(
-        color: highlight ? const Color(0xFFE9FFF0) : Colors.white.withValues(alpha: 0.08),
+        color: highlight
+            ? const Color(0xFFE9FFF0)
+            : Colors.white.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: highlight ? const Color(0xFF37A45B) : Colors.white.withValues(alpha: 0.08),
+          color: highlight
+              ? const Color(0xFF37A45B)
+              : Colors.white.withValues(alpha: 0.08),
         ),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-          title.toUpperCase(),
-          style: TextStyle(
-            color: highlight ? const Color(0xFF1F7A3F) : Colors.white70,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.4,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              color: highlight ? const Color(0xFF1F7A3F) : Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: TextStyle(
-            color: highlight ? const Color(0xFF1F7A3F) : Colors.white,
-            fontSize: compact ? 14 : 17,
-            fontWeight: FontWeight.w900,
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: highlight ? const Color(0xFF1F7A3F) : Colors.white,
+              fontSize: compact ? 14 : 17,
+              fontWeight: FontWeight.w900,
+            ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
   Widget buildTableToolbar() {
-    return Row(children: [
-      const Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(
-            'Salário Calculado',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -0.4, color: AppColors.navy),
+    return Row(
+      children: [
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Salário Calculado',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.4,
+                  color: AppColors.navy,
+                ),
+              ),
+              SizedBox(height: 6),
+              Text(
+                'Tabela operacional com proventos, base de IR, descontos e salário líquido.',
+                style: TextStyle(
+                  color: Color(0xFF617086),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
-          SizedBox(height: 6),
-          Text(
-            'Tabela operacional com proventos, base de IR, descontos e salário líquido.',
-            style: TextStyle(color: Color(0xFF617086), fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-        ]),
-      ),
-      PrimaryButton(icon: Icons.picture_as_pdf_outlined, label: 'Baixar PDF', onTap: imprimirPdfHolerite),
-      const SizedBox(width: 10),
-      SecondaryButton(
-        icon: Icons.badge_outlined,
-        label: selectedCargo,
-        onTap: () => setState(() => selectedIndex = 0),
-      ),
-    ]);
+        ),
+        PrimaryButton(
+          icon: Icons.picture_as_pdf_outlined,
+          label: 'Baixar PDF',
+          onTap: imprimirPdfHolerite,
+        ),
+        const SizedBox(width: 10),
+        SecondaryButton(
+          icon: Icons.badge_outlined,
+          label: selectedCargo,
+          onTap: () => setState(() => selectedIndex = 0),
+        ),
+      ],
+    );
   }
 
   Map<String, dynamic> obterConfigCargo() {
@@ -1428,31 +1882,84 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final valorKmDiurno = kmDiurno * toDouble(config['km_diurno']);
     final valorKmNoturno = kmNoturno * toDouble(config['km_noturno']);
     final valorKmFimSemana = kmFimSemana * toDouble(config['km_fim_semana']);
-    final valorKmFimSemanaNoturno = kmFimSemanaNoturno * toDouble(config['km_fim_semana_noturno']);
+    final valorKmFimSemanaNoturno =
+        kmFimSemanaNoturno * toDouble(config['km_fim_semana_noturno']);
     final valorReserva = horasReserva * toDouble(config['hora_reserva']);
-    final valorSobreaviso = horasSobreaviso * toDouble(config['hora_sobreaviso']);
+    final valorSobreaviso =
+        horasSobreaviso * toDouble(config['hora_sobreaviso']);
     final valorSimulador = 0.0;
 
     final variaveisParaRepouso =
-        valorKmDiurno + valorKmNoturno + valorKmFimSemana + valorKmFimSemanaNoturno + valorReserva + valorSobreaviso + valorSimulador;
+        valorKmDiurno +
+        valorKmNoturno +
+        valorKmFimSemana +
+        valorKmFimSemanaNoturno +
+        valorReserva +
+        valorSobreaviso +
+        valorSimulador;
 
     final repousoRemunerado = variaveisParaRepouso / 22 * 8;
-    final gratificacao = gratificacaoAtiva ? toDouble(config['gratificacao']) : 0.0;
+    final gratificacao = gratificacaoAtiva
+        ? toDouble(config['gratificacao'])
+        : 0.0;
 
     final proventos = [
-      criarProvento('Salario Base', 1, toDouble(config['salario_base']), salarioBase),
-      criarProvento('KM Diurno', kmDiurno, toDouble(config['km_diurno']), valorKmDiurno),
-      criarProvento('KM Noturno', kmNoturno, toDouble(config['km_noturno']), valorKmNoturno),
-      criarProvento('KM Fim de Semana', kmFimSemana, toDouble(config['km_fim_semana']), valorKmFimSemana),
-      criarProvento('KM Fim de Semana NOT', kmFimSemanaNoturno, toDouble(config['km_fim_semana_noturno']), valorKmFimSemanaNoturno),
-      criarProvento('Horas Reserva', horasReserva, toDouble(config['hora_reserva']), valorReserva),
-      criarProvento('Sobreaviso', horasSobreaviso, toDouble(config['hora_sobreaviso']), valorSobreaviso),
-      criarProvento('Simulador', '', toDouble(config['hora_simulador']), valorSimulador),
+      criarProvento(
+        'Salario Base',
+        1,
+        toDouble(config['salario_base']),
+        salarioBase,
+      ),
+      criarProvento(
+        'KM Diurno',
+        kmDiurno,
+        toDouble(config['km_diurno']),
+        valorKmDiurno,
+      ),
+      criarProvento(
+        'KM Noturno',
+        kmNoturno,
+        toDouble(config['km_noturno']),
+        valorKmNoturno,
+      ),
+      criarProvento(
+        'KM Fim de Semana',
+        kmFimSemana,
+        toDouble(config['km_fim_semana']),
+        valorKmFimSemana,
+      ),
+      criarProvento(
+        'KM Fim de Semana NOT',
+        kmFimSemanaNoturno,
+        toDouble(config['km_fim_semana_noturno']),
+        valorKmFimSemanaNoturno,
+      ),
+      criarProvento(
+        'Horas Reserva',
+        horasReserva,
+        toDouble(config['hora_reserva']),
+        valorReserva,
+      ),
+      criarProvento(
+        'Sobreaviso',
+        horasSobreaviso,
+        toDouble(config['hora_sobreaviso']),
+        valorSobreaviso,
+      ),
+      criarProvento(
+        'Simulador',
+        '',
+        toDouble(config['hora_simulador']),
+        valorSimulador,
+      ),
       criarProvento('Repouso Remunerado', '', '', repousoRemunerado),
       criarProvento('Gratificação', gratificacaoAtiva, '', gratificacao),
     ];
 
-    final totalProventos = proventos.fold<double>(0, (sum, item) => sum + toDouble(item['final']));
+    final totalProventos = proventos.fold<double>(
+      0,
+      (sum, item) => sum + toDouble(item['final']),
+    );
 
     final inssRemuneracao = 988.07;
     final baseIr = totalProventos - inssRemuneracao;
@@ -1461,23 +1968,48 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final descontoAmil = assistenciaMedicaAmil * 443.05;
     final descontoDasa = servicoSaudeDasa ? 14.90 : 0.0;
     final descontoBradesco = seguroBradescoFuneral ? 4.96 : 0.0;
-    final descontoSeguroComplementar = calcularSeguroVidaComplementar(seguroVidaComplementar);
+    final descontoSeguroComplementar = calcularSeguroVidaComplementar(
+      seguroVidaComplementar,
+    );
     final descontoOdonto = calcularOdontoFamilia(assistenciaOdontoFamilia);
     final descontoGympass = calcularGympass(gympass);
     final irrfSalario = (baseIr * 0.275) - 908.73;
 
     final descontos = [
-      criarDesconto('Previdencia Privada', previdenciaPrivada, descontoPrevidencia),
-      criarDesconto('Assistencia Medica AMIL', assistenciaMedicaAmil, descontoAmil),
+      criarDesconto(
+        'Previdencia Privada',
+        previdenciaPrivada,
+        descontoPrevidencia,
+      ),
+      criarDesconto(
+        'Assistencia Medica AMIL',
+        assistenciaMedicaAmil,
+        descontoAmil,
+      ),
       criarDesconto('Servico de Saude DASA', servicoSaudeDasa, descontoDasa),
-      criarDesconto('Seguro de Vida Bradesco Funeral', seguroBradescoFuneral, descontoBradesco),
-      criarDesconto('Seguro de Vida Complementar', seguroVidaComplementar, descontoSeguroComplementar),
-      criarDesconto('Assistencia Odonto Familia', assistenciaOdontoFamilia, descontoOdonto),
+      criarDesconto(
+        'Seguro de Vida Bradesco Funeral',
+        seguroBradescoFuneral,
+        descontoBradesco,
+      ),
+      criarDesconto(
+        'Seguro de Vida Complementar',
+        seguroVidaComplementar,
+        descontoSeguroComplementar,
+      ),
+      criarDesconto(
+        'Assistencia Odonto Familia',
+        assistenciaOdontoFamilia,
+        descontoOdonto,
+      ),
       criarDesconto('Gympass', gympass, descontoGympass),
       criarDesconto('IRRF salario', '', irrfSalario),
     ];
 
-    final descontoTotal = descontos.fold<double>(0, (sum, item) => sum + toDouble(item['valor']));
+    final descontoTotal = descontos.fold<double>(
+      0,
+      (sum, item) => sum + toDouble(item['valor']),
+    );
     final salarioLiquido = totalProventos - descontoTotal;
 
     return {
@@ -1496,7 +2028,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     };
   }
 
-  Map<String, dynamic> criarProvento(String descricao, dynamic quantidade, dynamic razao, double finalValue) {
+  Map<String, dynamic> criarProvento(
+    String descricao,
+    dynamic quantidade,
+    dynamic razao,
+    double finalValue,
+  ) {
     return {
       'descricao': descricao,
       'quantidade': quantidade,
@@ -1505,18 +2042,24 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     };
   }
 
-  Map<String, dynamic> criarDesconto(String descricao, dynamic opcao, double valor) {
-    return {
-      'descricao': descricao,
-      'opcao': opcao,
-      'valor': valor,
-    };
+  Map<String, dynamic> criarDesconto(
+    String descricao,
+    dynamic opcao,
+    double valor,
+  ) {
+    return {'descricao': descricao, 'opcao': opcao, 'valor': valor};
   }
 
   double calcularPrevidenciaPrivada(double totalProventos) {
-    final percentual = double.tryParse(previdenciaPrivada.replaceAll('%', '').replaceAll(',', '.')) ?? 0;
+    final percentual =
+        double.tryParse(
+          previdenciaPrivada.replaceAll('%', '').replaceAll(',', '.'),
+        ) ??
+        0;
     final config = obterConfigCargo();
-    final gratificacao = gratificacaoAtiva ? toDouble(config['gratificacao']) : 0.0;
+    final gratificacao = gratificacaoAtiva
+        ? toDouble(config['gratificacao'])
+        : 0.0;
     final base = totalProventos - gratificacao;
     return base * percentual / 100;
   }
@@ -1574,7 +2117,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     }
   }
 
-
   Widget buildSalaryExcelPanel(Map<String, dynamic> holerite) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1585,18 +2127,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [AppColors.navy.withValues(alpha: 0.05), AppColors.blue.withValues(alpha: 0.06)]),
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.navy.withValues(alpha: 0.05),
+                    AppColors.blue.withValues(alpha: 0.06),
+                  ],
+                ),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: AppColors.line),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.swipe_outlined, color: AppColors.blue, size: 20),
+                  const Icon(
+                    Icons.swipe_outlined,
+                    color: AppColors.blue,
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      isMobile ? 'Deslize a tabela para os lados.' : 'Tabela no padrão operacional, com visual mais limpo.',
-                      style: const TextStyle(color: Color(0xFF536273), fontSize: 13, fontWeight: FontWeight.w700),
+                      isMobile
+                          ? 'Deslize a tabela para os lados.'
+                          : 'Tabela no padrão operacional, com visual mais limpo.',
+                      style: const TextStyle(
+                        color: Color(0xFF536273),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -1614,11 +2171,26 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-
   Widget buildSalaryModernPanel(Map<String, dynamic> holerite) {
-    final proventos = (holerite['proventos'] as List<dynamic>? ?? []).map(toStringDynamicMap).toList();
+    final proventos = (holerite['proventos'] as List<dynamic>? ?? [])
+        .map(toStringDynamicMap)
+        .toList();
     final baseIr = toStringDynamicMap(holerite['base_ir']);
-    final descontos = (holerite['descontos'] as List<dynamic>? ?? []).map(toStringDynamicMap).toList();
+    final descontos = (holerite['descontos'] as List<dynamic>? ?? [])
+        .map(toStringDynamicMap)
+        .toList();
+    final irrfSalario = descontos
+        .where(
+          (linha) => (linha['descricao']?.toString().toUpperCase() ?? '')
+              .contains('IRRF SALARIO'),
+        )
+        .toList();
+    final descontosSelecionaveis = descontos
+        .where(
+          (linha) => !(linha['descricao']?.toString().toUpperCase() ?? '')
+              .contains('IRRF SALARIO'),
+        )
+        .toList();
     final salario = toStringDynamicMap(holerite['salario']);
 
     return LayoutBuilder(
@@ -1627,28 +2199,60 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            buildEscalaHistoricoSelector(compactSalaryMode: true),
+            const SizedBox(height: 10),
             Wrap(
-              spacing: 14,
-              runSpacing: 14,
+              spacing: 10,
+              runSpacing: 10,
               children: [
-                buildSalarySummaryCard('Proventos', formatarMoeda(salario['proventos'], 'BRL'), Icons.trending_up_outlined, AppColors.blue, constraints.maxWidth, isMobile),
-                buildSalarySummaryCard('Descontos', '-${formatarMoeda(salario['descontos'], 'BRL')}', Icons.trending_down_outlined, const Color(0xFFE53935), constraints.maxWidth, isMobile),
-                buildSalarySummaryCard('Líquido', formatarMoeda(salario['salario_liquido'], 'BRL'), Icons.account_balance_wallet_outlined, AppColors.green, constraints.maxWidth, isMobile, highlight: true),
+                buildSalarySummaryCard(
+                  'Proventos',
+                  formatarMoeda(salario['proventos'], 'BRL'),
+                  Icons.trending_up_outlined,
+                  AppColors.blue,
+                  constraints.maxWidth,
+                  isMobile,
+                ),
+                buildSalarySummaryCard(
+                  'Descontos',
+                  '-${formatarMoeda(salario['descontos'], 'BRL')}',
+                  Icons.trending_down_outlined,
+                  const Color(0xFFE53935),
+                  constraints.maxWidth,
+                  isMobile,
+                ),
+                buildSalarySummaryCard(
+                  'Líquido',
+                  formatarMoeda(salario['salario_liquido'], 'BRL'),
+                  Icons.account_balance_wallet_outlined,
+                  AppColors.green,
+                  constraints.maxWidth,
+                  isMobile,
+                  highlight: true,
+                ),
               ],
             ),
-            const SizedBox(height: 22),
-            buildModernSectionTitle('Proventos', 'Valores calculados a partir da escala importada.'),
+            const SizedBox(height: 14),
+            buildModernSectionTitle(
+              'Proventos',
+              'Valores calculados a partir da escala importada.',
+            ),
+            const SizedBox(height: 8),
+            ...proventos.map(
+              (linha) => buildModernSalaryLine(
+                title: linha['descricao']?.toString() ?? '',
+                subtitle: buildProventoSubtitle(linha),
+                value: formatarMoeda(linha['final'], 'BRL'),
+                icon: iconForProvento(linha['descricao']?.toString() ?? ''),
+                accent: AppColors.blue,
+              ),
+            ),
             const SizedBox(height: 12),
-            ...proventos.map((linha) => buildModernSalaryLine(
-                  title: linha['descricao']?.toString() ?? '',
-                  subtitle: buildProventoSubtitle(linha),
-                  value: formatarMoeda(linha['final'], 'BRL'),
-                  icon: iconForProvento(linha['descricao']?.toString() ?? ''),
-                  accent: AppColors.blue,
-                )),
-            const SizedBox(height: 18),
-            buildModernSectionTitle('Base de IR', 'Base tributável usada para calcular o IRRF.'),
-            const SizedBox(height: 12),
+            buildModernSectionTitle(
+              'Base de IR',
+              'Base tributável usada para calcular o IRRF.',
+            ),
+            const SizedBox(height: 8),
             buildModernSalaryLine(
               title: 'Total de proventos',
               subtitle: 'Soma bruta calculada',
@@ -1670,36 +2274,80 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               icon: Icons.receipt_long_outlined,
               accent: AppColors.cyan,
             ),
-            const SizedBox(height: 18),
-            buildModernSectionTitle('Descontos', 'Ajuste os benefícios e confira o impacto no líquido.'),
+            ...irrfSalario.map(
+              (linha) => buildModernSalaryLine(
+                title: linha['descricao']?.toString() ?? 'IRRF salário',
+                subtitle: 'Calculado pela base de IR',
+                value: '-${formatarMoeda(linha['valor'], 'BRL')}',
+                icon: Icons.account_balance_outlined,
+                accent: const Color(0xFFE53935),
+              ),
+            ),
             const SizedBox(height: 12),
-            ...descontos.map((linha) => buildModernDiscountLine(linha)),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [AppColors.green.withValues(alpha: 0.14), AppColors.cyan.withValues(alpha: 0.08)]),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: AppColors.green.withValues(alpha: 0.20)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(color: AppColors.green.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(15)),
-                    child: const Icon(Icons.check_circle_outline, color: AppColors.green),
+            buildModernSectionTitle(
+              'Descontos',
+              'Ajuste os benefícios e confira o impacto no líquido.',
+            ),
+            const SizedBox(height: 8),
+            ...descontosSelecionaveis.map(
+              (linha) => buildModernDiscountLine(linha),
+            ),
+            const SizedBox(height: 12),
+            Builder(
+              builder: (context) {
+                final isDark = Theme.of(context).brightness == Brightness.dark;
+                return Container(
+                  padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.green.withValues(alpha: isDark ? 0.18 : 0.14),
+                        AppColors.cyan.withValues(alpha: isDark ? 0.12 : 0.08),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(17),
+                    border: Border.all(
+                      color: AppColors.green.withValues(alpha: 0.20),
+                    ),
                   ),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Text('Salário líquido estimado', style: TextStyle(color: AppColors.navy, fontSize: 17, fontWeight: FontWeight.w900)),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: AppColors.green.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.check_circle_outline,
+                          color: AppColors.green,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Salário líquido estimado',
+                          style: TextStyle(
+                            color: isDark ? Colors.white : AppColors.navy,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        formatarMoeda(salario['salario_liquido'], 'BRL'),
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.4,
+                        ),
+                      ),
+                    ],
                   ),
-                  Text(
-                    formatarMoeda(salario['salario_liquido'], 'BRL'),
-                    style: const TextStyle(color: AppColors.green, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: -0.4),
-                  ),
-                ],
-              ),
+                );
+              },
             ),
           ],
         );
@@ -1707,117 +2355,669 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  Widget buildSalarySummaryCard(String title, String value, IconData icon, Color color, double maxWidth, bool isMobile, {bool highlight = false}) {
-    final width = isMobile ? maxWidth : ((maxWidth - 28) / 3).clamp(190.0, 330.0);
+  Widget buildSalaryInsightStrip(
+    List<Map<String, dynamic>> proventos,
+    List<Map<String, dynamic>> descontos,
+    Map<String, dynamic> salario,
+  ) {
+    Map<String, dynamic> maiorProvento = {};
+    Map<String, dynamic> maiorDesconto = {};
+    for (final item in proventos) {
+      if (toDouble(item['final']) > toDouble(maiorProvento['final'])) {
+        maiorProvento = item;
+      }
+    }
+    for (final item in descontos) {
+      if (toDouble(item['valor']) > toDouble(maiorDesconto['valor'])) {
+        maiorDesconto = item;
+      }
+    }
+
+    final proventosTotal = toDouble(salario['proventos']);
+    final liquido = toDouble(salario['salario_liquido']);
+    final percentualLiquido = proventosTotal <= 0
+        ? 0.0
+        : (liquido / proventosTotal * 100).clamp(0, 100).toDouble();
+
+    Widget chip(IconData icon, String label, String value, Color accent) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: accent.withValues(alpha: 0.16)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Icon(icon, color: accent, size: 18),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF617086),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.navy,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final mobile = constraints.maxWidth < 760;
+        final items = [
+          chip(
+            Icons.bolt_outlined,
+            'Maior provento',
+            maiorProvento['descricao']?.toString() ?? '-',
+            AppColors.blue,
+          ),
+          chip(
+            Icons.remove_circle_outline,
+            'Maior desconto',
+            maiorDesconto['descricao']?.toString() ?? '-',
+            const Color(0xFFE53935),
+          ),
+          chip(
+            Icons.percent_outlined,
+            'Líquido sobre bruto',
+            '${formatarDecimal(percentualLiquido, casas: 1)}%',
+            AppColors.green,
+          ),
+        ];
+
+        if (mobile) {
+          return Column(
+            children:
+                items
+                    .expand((item) => [item, const SizedBox(height: 8)])
+                    .toList()
+                  ..removeLast(),
+          );
+        }
+
+        return Row(
+          children:
+              items
+                  .expand(
+                    (item) => [
+                      Expanded(child: item),
+                      const SizedBox(width: 10),
+                    ],
+                  )
+                  .toList()
+                ..removeLast(),
+        );
+      },
+    );
+  }
+
+  Widget buildSalarySummaryCard(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    double maxWidth,
+    bool isMobile, {
+    bool highlight = false,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final width = isMobile
+        ? maxWidth
+        : ((maxWidth - 28) / 3).clamp(190.0, 330.0);
+    final panelColor = isDark ? AppColors.navy2 : const Color(0xFFF7FAFE);
+    final textColor = isDark ? Colors.white : AppColors.navy;
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.58)
+        : AppColors.navy.withValues(alpha: 0.55);
     return Container(
       width: width,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: highlight ? color.withValues(alpha: 0.10) : const Color(0xFFF7FAFE),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: color.withValues(alpha: highlight ? 0.28 : 0.16)),
+        color: highlight
+            ? color.withValues(alpha: isDark ? 0.16 : 0.10)
+            : panelColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: color.withValues(alpha: highlight ? 0.28 : 0.16),
+        ),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(color: color.withValues(alpha: 0.13), borderRadius: BorderRadius.circular(14)),
-            child: Icon(icon, color: color, size: 21),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 25,
+                height: 25,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.13),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, color: color, size: 14),
+              ),
+              const Spacer(),
+              Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: mutedColor,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
           ),
-          const Spacer(),
-          Text(title.toUpperCase(), style: TextStyle(color: AppColors.navy.withValues(alpha: 0.55), fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.6)),
-        ]),
-        const SizedBox(height: 14),
-        Text(value, style: TextStyle(color: highlight ? color : AppColors.navy, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
-      ]),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              color: highlight ? color : textColor,
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget buildModernSectionTitle(String title, String subtitle) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: const TextStyle(color: AppColors.navy, fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: -0.3)),
-      const SizedBox(height: 4),
-      Text(subtitle, style: const TextStyle(color: Color(0xFF6A778A), fontSize: 13, fontWeight: FontWeight.w600)),
-    ]);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            color: isDark ? Colors.white : AppColors.navy,
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          subtitle,
+          style: TextStyle(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.58)
+                : const Color(0xFF6A778A),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
   }
 
-  Widget buildModernSalaryLine({required String title, required String subtitle, required String value, required IconData icon, required Color accent}) {
+  Widget buildModernSalaryLine({
+    required String title,
+    required String subtitle,
+    required String value,
+    required IconData icon,
+    required Color accent,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final panelColor = isDark
+        ? Colors.white.withValues(alpha: 0.06)
+        : const Color(0xFFF8FBFF);
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.09)
+        : const Color(0xFFE4ECF6);
+    final textColor = isDark ? Colors.white : AppColors.navy;
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.56)
+        : const Color(0xFF728096);
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FBFF),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE4ECF6)),
+        color: panelColor,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: borderColor),
       ),
-      child: Row(children: [
-        Container(
-          width: 38,
-          height: 38,
-          decoration: BoxDecoration(color: accent.withValues(alpha: 0.11), borderRadius: BorderRadius.circular(14)),
-          child: Icon(icon, color: accent, size: 20),
-        ),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(color: AppColors.navy, fontSize: 14, fontWeight: FontWeight.w900)),
-            if (subtitle.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(subtitle, style: const TextStyle(color: Color(0xFF728096), fontSize: 12, fontWeight: FontWeight.w600)),
-            ],
-          ]),
-        ),
-        const SizedBox(width: 12),
-        Text(value, textAlign: TextAlign.right, style: const TextStyle(color: AppColors.navy, fontSize: 15, fontWeight: FontWeight.w900)),
-      ]),
+      child: Row(
+        children: [
+          Container(
+            width: 31,
+            height: 31,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.11),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, color: accent, size: 16),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: mutedColor,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            value,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget buildModernDiscountLine(Map<String, dynamic> linha) {
     final label = linha['descricao']?.toString() ?? '';
     final value = formatarMoeda(linha['valor'], 'BRL');
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final danger = const Color(0xFFE53935);
+    final panelColor = isDark
+        ? Colors.white.withValues(alpha: 0.06)
+        : const Color(0xFFFFFBFB);
+    final borderColor = isDark
+        ? danger.withValues(alpha: 0.18)
+        : const Color(0xFFF0E2E2);
+    final textColor = isDark ? Colors.white : AppColors.navy;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFBFB),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFF0E2E2)),
+        color: panelColor,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: borderColor),
       ),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final mobile = constraints.maxWidth < 700;
-        final control = SizedBox(width: mobile ? double.infinity : 250, child: excelDiscountOptionCell(label, linha['opcao'], width: mobile ? constraints.maxWidth : 250));
-        final left = Row(children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(color: const Color(0xFFE53935).withValues(alpha: 0.10), borderRadius: BorderRadius.circular(14)),
-            child: const Icon(Icons.payments_outlined, color: Color(0xFFE53935), size: 20),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final mobile = constraints.maxWidth < 700;
+          final controlWidth = mobile ? constraints.maxWidth : 220.0;
+          final control = buildModernDiscountControl(label, controlWidth);
+          final left = Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: danger.withValues(alpha: isDark ? 0.18 : 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.payments_outlined, color: danger, size: 15),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          );
+
+          if (mobile) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                left,
+                const SizedBox(height: 4),
+                control,
+                const SizedBox(height: 3),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: left),
+              const SizedBox(width: 8),
+              control,
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 105,
+                child: Text(
+                  value,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget buildModernDiscountControl(String label, double width) {
+    if (label == 'Previdencia Privada') {
+      return modernDropdownControl<String>(
+        width: width,
+        value: previdenciaPrivada,
+        items: const [
+          'Nao Utilizo',
+          '0%',
+          '1%',
+          '2%',
+          '3%',
+          '4%',
+          '5%',
+          '6%',
+          '7%',
+          '8%',
+          '9%',
+          '10%',
+        ],
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => previdenciaPrivada = value);
+        },
+      );
+    }
+
+    if (label == 'Assistencia Medica AMIL') {
+      return modernDropdownControl<int>(
+        width: width,
+        value: assistenciaMedicaAmil,
+        items: const [0, 1, 2, 3, 4, 5],
+        itemLabel: (value) => '$value vidas',
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => assistenciaMedicaAmil = value);
+        },
+      );
+    }
+
+    if (label == 'Servico de Saude DASA') {
+      return modernSwitchControl(
+        width: width,
+        value: servicoSaudeDasa,
+        onChanged: (value) => setState(() => servicoSaudeDasa = value),
+      );
+    }
+
+    if (label == 'Seguro de Vida Bradesco Funeral') {
+      return modernSwitchControl(
+        width: width,
+        value: seguroBradescoFuneral,
+        onChanged: (value) => setState(() => seguroBradescoFuneral = value),
+      );
+    }
+
+    if (label == 'Seguro de Vida Complementar') {
+      return modernDropdownControl<String>(
+        width: width,
+        value: seguroVidaComplementar,
+        items: const [
+          'Nao Utilizo',
+          '39.93',
+          '79.86',
+          '119.79',
+          '159.72',
+          '199.65',
+          '239.58',
+          '279.51',
+          '319.44',
+          '359.37',
+          '399.30',
+        ],
+        itemLabel: (value) => value == 'Nao Utilizo'
+            ? value
+            : 'R\$ ${value.replaceAll('.', ',')}',
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => seguroVidaComplementar = value);
+        },
+      );
+    }
+
+    if (label == 'Assistencia Odonto Familia') {
+      return modernDropdownControl<String>(
+        width: width,
+        value: assistenciaOdontoFamilia,
+        items: const [
+          'Nao Utilizo',
+          'Dependentes',
+          'Dependentes + 1 Agregado',
+          'Dependentes + 2 Agregados',
+          'Dependentes + 3 Agregados',
+          'Dependentes + 4 Agregados',
+          'Dependentes + 5 Agregados',
+        ],
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => assistenciaOdontoFamilia = value);
+        },
+      );
+    }
+
+    if (label == 'Gympass') {
+      return modernDropdownControl<String>(
+        width: width,
+        value: gympass,
+        items: const [
+          'Nao Utilizo',
+          'Digital',
+          'Starter',
+          'Basic',
+          'Basic+',
+          'Silver',
+          'Silver+',
+          'Gold',
+          'Gold+',
+          'Platinum',
+          'Diamond',
+          'Diamond+',
+        ],
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => gympass = value);
+        },
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      child: Text(
+        formatarOpcaoDesconto(''),
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Theme.of(context).brightness == Brightness.dark
+              ? Colors.white70
+              : AppColors.navy,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget modernSwitchControl({
+    required double width,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : AppColors.softBlue;
+    final border = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : AppColors.blue.withValues(alpha: 0.16);
+
+    return SizedBox(
+      width: width,
+      height: 34,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onChanged(!value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: border),
           ),
-          const SizedBox(width: 13),
-          Expanded(child: Text(label, style: const TextStyle(color: AppColors.navy, fontSize: 14, fontWeight: FontWeight.w900))),
-        ]);
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: value ? AppColors.green : Colors.white24,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: value
+                        ? AppColors.green
+                        : Colors.white.withValues(alpha: 0.28),
+                  ),
+                ),
+                child: value
+                    ? const Icon(Icons.check, color: Colors.white, size: 12)
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                value ? 'Ativo' : 'Não uso',
+                style: TextStyle(
+                  color: isDark ? Colors.white : AppColors.navy,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-        if (mobile) {
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            left,
-            const SizedBox(height: 10),
-            control,
-            const SizedBox(height: 8),
-            Align(alignment: Alignment.centerRight, child: Text(value, style: const TextStyle(color: AppColors.navy, fontSize: 15, fontWeight: FontWeight.w900))),
-          ]);
-        }
+  Widget modernDropdownControl<T>({
+    required double width,
+    required T value,
+    required List<T> items,
+    required void Function(T?) onChanged,
+    String Function(T value)? itemLabel,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : AppColors.softBlue;
+    final border = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : AppColors.blue.withValues(alpha: 0.16);
+    final textColor = isDark ? Colors.white : AppColors.navy;
 
-        return Row(children: [
-          Expanded(child: left),
-          const SizedBox(width: 12),
-          control,
-          const SizedBox(width: 12),
-          SizedBox(width: 120, child: Text(value, textAlign: TextAlign.right, style: const TextStyle(color: AppColors.navy, fontSize: 15, fontWeight: FontWeight.w900))),
-        ]);
-      }),
+    return Container(
+      width: width,
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isDense: true,
+          isExpanded: true,
+          dropdownColor: isDark ? AppColors.navy2 : Colors.white,
+          icon: Icon(Icons.keyboard_arrow_down, color: textColor, size: 17),
+          style: TextStyle(
+            color: textColor,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+          items: items
+              .map(
+                (item) => DropdownMenuItem<T>(
+                  value: item,
+                  child: Text(
+                    itemLabel == null ? item.toString() : itemLabel(item),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: onChanged,
+        ),
+      ),
     );
   }
 
@@ -1849,47 +3049,75 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final salario = toStringDynamicMap(holerite['salario']);
 
     return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
       child: SizedBox(
         width: 850,
-        child: Column(children: [
-          excelTitleRow('SIMULAÇÃO CREW 4U'),
-          excelSectionRow('PROVENTOS'),
-          excelHeaderRow(['', 'QUANTIDADE', 'RAZAO', 'FINAL']),
-          ...proventos.map((item) {
-            final linha = toStringDynamicMap(item);
+        child: Column(
+          children: [
+            excelTitleRow('SIMULAÇÃO CREW 4U'),
+            excelSectionRow('PROVENTOS'),
+            excelHeaderRow(['', 'QUANTIDADE', 'RAZAO', 'FINAL']),
+            ...proventos.map((item) {
+              final linha = toStringDynamicMap(item);
 
-            return excelDataRow([
-              linha['descricao']?.toString() ?? '',
-              formatarQuantidadeOuTexto(linha['quantidade']),
-              formatarRazao(linha['razao']),
-              formatarMoeda(linha['final'], 'BRL'),
-            ]);
-          }),
-          excelTotalRow('TOTAL PROVENTOS', formatarMoeda(salario['proventos'], 'BRL')),
-          excelBlankRow(),
-          excelSectionRow('BASE DE IR'),
-          excelTwoColumnRow('Total Proventos', formatarMoeda(baseIr['total_proventos'], 'BRL')),
-          excelTwoColumnRow('INSS Remuneração', '-${formatarMoeda(baseIr['inss_remuneracao'], 'BRL')}'),
-          excelTotalRow('Base de IR', formatarMoeda(baseIr['base_ir'], 'BRL')),
-          excelBlankRow(),
-          excelSectionRow('DESCONTOS'),
-          ...descontos.map((item) {
-            final linha = toStringDynamicMap(item);
+              return excelDataRow([
+                linha['descricao']?.toString() ?? '',
+                formatarQuantidadeOuTexto(linha['quantidade']),
+                formatarRazao(linha['razao']),
+                formatarMoeda(linha['final'], 'BRL'),
+              ]);
+            }),
+            excelTotalRow(
+              'TOTAL PROVENTOS',
+              formatarMoeda(salario['proventos'], 'BRL'),
+            ),
+            excelBlankRow(),
+            excelSectionRow('BASE DE IR'),
+            excelTwoColumnRow(
+              'Total Proventos',
+              formatarMoeda(baseIr['total_proventos'], 'BRL'),
+            ),
+            excelTwoColumnRow(
+              'INSS Remuneração',
+              '-${formatarMoeda(baseIr['inss_remuneracao'], 'BRL')}',
+            ),
+            excelTotalRow(
+              'Base de IR',
+              formatarMoeda(baseIr['base_ir'], 'BRL'),
+            ),
+            excelBlankRow(),
+            excelSectionRow('DESCONTOS'),
+            ...descontos.map((item) {
+              final linha = toStringDynamicMap(item);
 
-            return excelDiscountRow(
-              linha['descricao']?.toString() ?? '',
-              linha['opcao'],
-              formatarMoeda(linha['valor'], 'BRL'),
-            );
-          }),
-          excelTotalRow('DESCONTO TOTAL', formatarMoeda(salario['descontos'], 'BRL')),
-          excelBlankRow(),
-          excelSectionRow('SALARIO'),
-          excelTwoColumnRow('Proventos', formatarMoeda(salario['proventos'], 'BRL')),
-          excelTwoColumnRow('Descontos', '-${formatarMoeda(salario['descontos'], 'BRL')}'),
-          excelSalaryLiquidRow(formatarMoeda(salario['salario_liquido'], 'BRL')),
-        ]),
+              return excelDiscountRow(
+                linha['descricao']?.toString() ?? '',
+                linha['opcao'],
+                formatarMoeda(linha['valor'], 'BRL'),
+              );
+            }),
+            excelTotalRow(
+              'DESCONTO TOTAL',
+              formatarMoeda(salario['descontos'], 'BRL'),
+            ),
+            excelBlankRow(),
+            excelSectionRow('SALARIO'),
+            excelTwoColumnRow(
+              'Proventos',
+              formatarMoeda(salario['proventos'], 'BRL'),
+            ),
+            excelTwoColumnRow(
+              'Descontos',
+              '-${formatarMoeda(salario['descontos'], 'BRL')}',
+            ),
+            excelSalaryLiquidRow(
+              formatarMoeda(salario['salario_liquido'], 'BRL'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1904,7 +3132,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       alignment: Alignment.center,
       child: Text(
         text,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.2),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w900,
+          fontSize: 16,
+          letterSpacing: 0.2,
+        ),
       ),
     );
   }
@@ -1919,29 +3152,39 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       alignment: Alignment.center,
       child: Text(
         text,
-        style: const TextStyle(color: AppColors.navy, fontWeight: FontWeight.w900, fontSize: 16),
+        style: const TextStyle(
+          color: AppColors.navy,
+          fontWeight: FontWeight.w900,
+          fontSize: 16,
+        ),
       ),
     );
   }
 
   Widget excelHeaderRow(List<String> values) {
-    return Row(children: [
-      excelCell(values[0], width: 310, bold: true, center: true),
-      excelCell(values[1], width: 185, bold: true, center: true),
-      excelCell(values[2], width: 195, bold: true, center: true),
-      excelCell(values[3], width: 160, bold: true, center: true),
-    ]);
+    return Row(
+      children: [
+        excelCell(values[0], width: 310, bold: true, center: true),
+        excelCell(values[1], width: 185, bold: true, center: true),
+        excelCell(values[2], width: 195, bold: true, center: true),
+        excelCell(values[3], width: 160, bold: true, center: true),
+      ],
+    );
   }
 
   Widget excelDataRow(List<String> values) {
     final isGratificacao = values[0] == 'Gratificação';
 
-    return Row(children: [
-      excelCell(values[0], width: 310, bold: true, align: TextAlign.left),
-      isGratificacao ? excelGratificacaoCell(width: 185) : excelCell(values[1], width: 185),
-      excelCell(values[2], width: 195),
-      excelCell(values[3], width: 160),
-    ]);
+    return Row(
+      children: [
+        excelCell(values[0], width: 310, bold: true, align: TextAlign.left),
+        isGratificacao
+            ? excelGratificacaoCell(width: 185)
+            : excelCell(values[1], width: 185),
+        excelCell(values[2], width: 195),
+        excelCell(values[3], width: 160),
+      ],
+    );
   }
 
   Widget excelGratificacaoCell({required double width}) {
@@ -1998,26 +3241,46 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget excelTwoColumnRow(String label, String value) {
-    return Row(children: [
-      excelCell(label, width: 640, bold: false, align: TextAlign.left),
-      excelCell(value, width: 210, bold: true),
-    ]);
+    return Row(
+      children: [
+        excelCell(label, width: 640, bold: false, align: TextAlign.left),
+        excelCell(value, width: 210, bold: true),
+      ],
+    );
   }
 
   Widget excelDiscountRow(String label, dynamic option, String value) {
-    return Row(children: [
-      excelCell(label, width: 395, bold: true, align: TextAlign.left),
-      excelDiscountOptionCell(label, option, width: 245),
-      excelCell(value, width: 210, bold: true),
-    ]);
+    return Row(
+      children: [
+        excelCell(label, width: 395, bold: true, align: TextAlign.left),
+        excelDiscountOptionCell(label, option, width: 245),
+        excelCell(value, width: 210, bold: true),
+      ],
+    );
   }
 
-  Widget excelDiscountOptionCell(String label, dynamic option, {required double width}) {
+  Widget excelDiscountOptionCell(
+    String label,
+    dynamic option, {
+    required double width,
+  }) {
     if (label == 'Previdencia Privada') {
       return excelDropdownCell<String>(
         width: width,
         value: previdenciaPrivada,
-        items: const ['0%', '1%', '2%', '3%', '4%', '5%', '6%', '7%', '8%', '9%', '10%'],
+        items: const [
+          '0%',
+          '1%',
+          '2%',
+          '3%',
+          '4%',
+          '5%',
+          '6%',
+          '7%',
+          '8%',
+          '9%',
+          '10%',
+        ],
         onChanged: (value) {
           if (value == null) return;
           setState(() => previdenciaPrivada = value);
@@ -2050,7 +3313,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       return excelCheckboxCell(
         width: width,
         value: seguroBradescoFuneral,
-        onChanged: (value) => setState(() => seguroBradescoFuneral = value ?? false),
+        onChanged: (value) =>
+            setState(() => seguroBradescoFuneral = value ?? false),
       );
     }
 
@@ -2071,7 +3335,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           '359.37',
           '399.30',
         ],
-        itemLabel: (value) => value == 'Nao Utilizo' ? value : 'R\$ ${value.replaceAll('.', ',')}',
+        itemLabel: (value) => value == 'Nao Utilizo'
+            ? value
+            : 'R\$ ${value.replaceAll('.', ',')}',
         onChanged: (value) {
           if (value == null) return;
           setState(() => seguroVidaComplementar = value);
@@ -2136,19 +3402,19 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }) {
     return Container(
       width: width,
-      height: 35,
+      height: 28,
       decoration: BoxDecoration(
         color: AppColors.inputCell,
         border: Border.all(color: Colors.black26, width: 0.7),
       ),
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 5),
       child: Container(
-        height: 27,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        height: 22,
+        padding: const EdgeInsets.symmetric(horizontal: 7),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.88),
-          borderRadius: BorderRadius.circular(9),
+          borderRadius: BorderRadius.circular(7),
           border: Border.all(color: Colors.black12),
         ),
         child: DropdownButtonHideUnderline(
@@ -2156,8 +3422,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             value: value,
             isDense: true,
             isExpanded: true,
-            iconSize: 18,
-            style: const TextStyle(color: Colors.black, fontSize: 13, fontWeight: FontWeight.w700),
+            iconSize: 16,
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
             items: items.map((item) {
               return DropdownMenuItem<T>(
                 value: item,
@@ -2181,7 +3451,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }) {
     return Container(
       width: width,
-      height: 35,
+      height: 28,
       decoration: BoxDecoration(
         color: AppColors.inputCell,
         border: Border.all(color: Colors.black26, width: 0.7),
@@ -2190,16 +3460,19 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       child: Checkbox(
         value: value,
         activeColor: AppColors.blue,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         onChanged: onChanged,
       ),
     );
   }
 
   Widget excelTotalRow(String label, String value) {
-    return Row(children: [
-      excelCell(label, width: 640, bold: true, center: true),
-      excelCell(value, width: 210, bold: true),
-    ]);
+    return Row(
+      children: [
+        excelCell(label, width: 640, bold: true, center: true),
+        excelCell(value, width: 210, bold: true),
+      ],
+    );
   }
 
   Widget excelBlankRow() {
@@ -2213,35 +3486,45 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget excelSalaryLiquidRow(String value) {
-    return Row(children: [
-      Container(
-        width: 640,
-        height: 38,
-        decoration: BoxDecoration(
-          color: const Color(0xFFE9F7ED),
-          border: Border.all(color: AppColors.green, width: 2),
+    return Row(
+      children: [
+        Container(
+          width: 640,
+          height: 38,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE9F7ED),
+            border: Border.all(color: AppColors.green, width: 2),
+          ),
+          alignment: Alignment.center,
+          child: const Text(
+            'SALARIO LIQUIDO',
+            style: TextStyle(
+              color: AppColors.green,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+            ),
+          ),
         ),
-        alignment: Alignment.center,
-        child: const Text(
-          'SALARIO LIQUIDO',
-          style: TextStyle(color: AppColors.green, fontWeight: FontWeight.w900, fontSize: 16),
+        Container(
+          width: 210,
+          height: 38,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE9F7ED),
+            border: Border.all(color: AppColors.green, width: 2),
+          ),
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text(
+            value,
+            style: const TextStyle(
+              color: Colors.black,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+            ),
+          ),
         ),
-      ),
-      Container(
-        width: 210,
-        height: 38,
-        decoration: BoxDecoration(
-          color: const Color(0xFFE9F7ED),
-          border: Border.all(color: AppColors.green, width: 2),
-        ),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: Text(
-          value,
-          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16),
-        ),
-      ),
-    ]);
+      ],
+    );
   }
 
   Widget excelCell(
@@ -2254,8 +3537,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final effectiveAlignment = center
         ? Alignment.center
         : align == TextAlign.left
-            ? Alignment.centerLeft
-            : Alignment.centerRight;
+        ? Alignment.centerLeft
+        : Alignment.centerRight;
 
     return Container(
       width: width,
@@ -2306,7 +3589,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           dropdownColor: AppColors.navy,
           iconEnabledColor: Colors.white,
           isExpanded: true,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+          ),
           items: items,
           onChanged: onChanged,
         ),
@@ -2344,64 +3630,107 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   Widget buildValidatorSection() {
     final inconsistencias = coletarInconsistencias();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor = isDark ? Colors.white : AppColors.navy;
+    final textColor = isDark
+        ? Colors.white.withValues(alpha: 0.68)
+        : const Color(0xFF536273);
 
-    return GlassCard(
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.navy : AppColors.panel,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(
+          color: isDark ? Colors.white.withValues(alpha: 0.10) : AppColors.line,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.navy.withValues(alpha: isDark ? 0.18 : 0.06),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(26),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(
-              inconsistencias.isEmpty ? Icons.verified_outlined : Icons.warning_amber_rounded,
-              color: inconsistencias.isEmpty ? Colors.green.shade700 : Colors.orange.shade800,
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  inconsistencias.isEmpty
+                      ? Icons.verified_outlined
+                      : Icons.warning_amber_rounded,
+                  color: inconsistencias.isEmpty
+                      ? Colors.green.shade700
+                      : Colors.orange.shade800,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Validador da Escala',
+                  style: TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                    color: titleColor,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            const Text(
-              'Validador da Escala',
-              style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: AppColors.navy),
-            ),
-          ]),
-          const SizedBox(height: 14),
-          if (inconsistencias.isEmpty)
-            const Text(
-              'Nenhuma inconsistência crítica encontrada na importação atual.',
-              style: TextStyle(color: Color(0xFF536273), fontWeight: FontWeight.w600),
-            )
-          else
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: inconsistencias.map((item) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('• '),
-                    Expanded(
-                      child: Text(
-                        item,
-                        style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
-                      ),
+            const SizedBox(height: 14),
+            if (inconsistencias.isEmpty)
+              Text(
+                'Nenhuma inconsistência crítica encontrada na importação atual.',
+                style: TextStyle(color: textColor, fontWeight: FontWeight.w600),
+              )
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: inconsistencias.map((item) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('• ', style: TextStyle(color: textColor)),
+                        Expanded(
+                          child: Text(
+                            item,
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ]),
-                );
-              }).toList(),
-            ),
-        ]),
+                  );
+                }).toList(),
+              ),
+          ],
+        ),
       ),
     );
   }
 
   List<String> coletarInconsistencias() {
     final problemas = <String>[];
-    final voosSemDistancia = (resumo['voos_sem_distancia'] as List<dynamic>? ?? []);
+    final voosSemDistancia =
+        (resumo['voos_sem_distancia'] as List<dynamic>? ?? []);
 
     if (voosSemDistancia.isNotEmpty) {
-      problemas.add('Existem voos sem distância calculada: ${voosSemDistancia.join(', ')}.');
+      problemas.add(
+        'Existem voos sem distância calculada: ${voosSemDistancia.join(', ')}.',
+      );
     }
 
     if (escalaEventos.isEmpty && selectedFileName != null) {
       problemas.add('O arquivo foi importado, mas nenhum evento foi tratado.');
     }
 
-    final eventosSemStatus = escalaEventos.where((event) => (event['status'] ?? '').trim().isEmpty).length;
+    final eventosSemStatus = escalaEventos
+        .where((event) => (event['status'] ?? '').trim().isEmpty)
+        .length;
     if (eventosSemStatus > 0) {
       problemas.add('$eventosSemStatus eventos estão sem status.');
     }
@@ -2419,7 +3748,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         .length;
 
     if (semDutyReport > 0) {
-      problemas.add('$semDutyReport linhas possuem diária marcada sem Duty Report visível.');
+      problemas.add(
+        '$semDutyReport linhas possuem diária marcada sem Duty Report visível.',
+      );
     }
 
     return problemas;
@@ -2431,39 +3762,48 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return GlassCard(
       child: Padding(
         padding: const EdgeInsets.all(26),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text(
-            'Histórico da Sessão',
-            style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: AppColors.navy),
-          ),
-          const SizedBox(height: 16),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
-              columns: const [
-                DataColumn(label: Text('Arquivo')),
-                DataColumn(label: Text('Cargo')),
-                DataColumn(label: Text('Voos')),
-                DataColumn(label: Text('Eventos')),
-                DataColumn(label: Text('Proventos')),
-                DataColumn(label: Text('Descontos')),
-                DataColumn(label: Text('Líquido')),
-              ],
-              rows: historicoImportacoes.map((item) {
-                return DataRow(cells: [
-                  DataCell(Text(item['arquivo']?.toString() ?? '')),
-                  DataCell(Text(item['cargo']?.toString() ?? '')),
-                  DataCell(Text(item['voos']?.toString() ?? '0')),
-                  DataCell(Text(item['eventos']?.toString() ?? '0')),
-                  DataCell(Text(formatarMoeda(item['proventos'], 'BRL'))),
-                  DataCell(Text(formatarMoeda(item['descontos'], 'BRL'))),
-                  DataCell(Text(formatarMoeda(item['liquido'], 'BRL'))),
-                ]);
-              }).toList(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Histórico da Sessão',
+              style: TextStyle(
+                fontSize: 23,
+                fontWeight: FontWeight.w900,
+                color: AppColors.navy,
+              ),
             ),
-          ),
-        ]),
+            const SizedBox(height: 16),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
+                columns: const [
+                  DataColumn(label: Text('Arquivo')),
+                  DataColumn(label: Text('Cargo')),
+                  DataColumn(label: Text('Voos')),
+                  DataColumn(label: Text('Eventos')),
+                  DataColumn(label: Text('Proventos')),
+                  DataColumn(label: Text('Descontos')),
+                  DataColumn(label: Text('Líquido')),
+                ],
+                rows: historicoImportacoes.map((item) {
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(item['arquivo']?.toString() ?? '')),
+                      DataCell(Text(item['cargo']?.toString() ?? '')),
+                      DataCell(Text(item['voos']?.toString() ?? '0')),
+                      DataCell(Text(item['eventos']?.toString() ?? '0')),
+                      DataCell(Text(formatarMoeda(item['proventos'], 'BRL'))),
+                      DataCell(Text(formatarMoeda(item['descontos'], 'BRL'))),
+                      DataCell(Text(formatarMoeda(item['liquido'], 'BRL'))),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2472,36 +3812,200 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     if (diarias.isEmpty) return const SizedBox.shrink();
 
     final grupos = ['NACIONAL', 'ARGENTINA', 'CHILE', 'AMERICA_DO_SUL'];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return GlassCard(
+    return Container(
+      decoration: BoxDecoration(
+        gradient: isDark
+            ? const LinearGradient(colors: [AppColors.navy, AppColors.navy2])
+            : const LinearGradient(
+                colors: [Color(0xFFFFFFFF), Color(0xFFEAF5FF)],
+              ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.10)
+              : AppColors.blue.withValues(alpha: 0.12),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.navy.withValues(alpha: isDark ? 0.18 : 0.06),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(26),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text(
-            'Resumo de Diárias',
-            style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: AppColors.navy),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Nacional em R\$ e internacional em US\$. Exterior convertido no topo pela cotação automática.',
-            style: TextStyle(color: Color(0xFF617086), fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 20),
-          Wrap(
-            spacing: 24,
-            runSpacing: 24,
-            children: grupos.map((grupo) {
-              final dadosGrupo = toStringDynamicMap(diarias[grupo]);
-              final moeda = dadosGrupo['moeda']?.toString() ?? obterMoedaPadraoDoGrupo(grupo);
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Resumo de Diárias',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: isDark ? Colors.white : AppColors.navy,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Nacional em R\$ e internacional em US\$. Exterior convertido no topo pela cotação automática.',
+              style: TextStyle(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.58)
+                    : const Color(0xFF617086),
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cardWidth = constraints.maxWidth < 430
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - 8) / 2;
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: grupos.map((grupo) {
+                    final dadosGrupo = toStringDynamicMap(diarias[grupo]);
+                    final moeda =
+                        dadosGrupo['moeda']?.toString() ??
+                        obterMoedaPadraoDoGrupo(grupo);
 
-              return buildTabelaGrupoDiaria(
-                grupo: grupo,
-                dadosGrupo: dadosGrupo,
-                moeda: moeda,
-              );
-            }).toList(),
+                    return buildDiariaResumoCard(
+                      grupo: grupo,
+                      dadosGrupo: dadosGrupo,
+                      moeda: moeda,
+                      width: cardWidth,
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildDiariaResumoCard({
+    required String grupo,
+    required Map<String, dynamic> dadosGrupo,
+    required String moeda,
+    required double width,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : AppColors.navy;
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.56)
+        : const Color(0xFF617086);
+    final refeicoes = [
+      ['Café', 'cafe'],
+      ['Almoço', 'almoco'],
+      ['Janta', 'jantar'],
+      ['Ceia', 'ceia'],
+    ];
+
+    return Container(
+      width: width,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.06)
+            : Colors.white.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.09)
+              : const Color(0xFFE2ECF7),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: AppColors.blue.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.restaurant_outlined,
+                  color: AppColors.blue,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  formatarGrupo(grupo),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                formatarMoeda(dadosGrupo['total'], moeda),
+                style: const TextStyle(
+                  color: AppColors.green,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
           ),
-        ]),
+          const SizedBox(height: 10),
+          ...refeicoes.map((item) {
+            final dados = toStringDynamicMap(dadosGrupo[item[1]]);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item[0],
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${dados['quantidade'] ?? 0}x',
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 66,
+                    child: Text(
+                      formatarMoeda(dados['valor_total'], moeda),
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -2554,7 +4058,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  TableRow diariaRow(String titulo, Map<String, dynamic> grupo, String refeicao, String moeda) {
+  TableRow diariaRow(
+    String titulo,
+    Map<String, dynamic> grupo,
+    String refeicao,
+    String moeda,
+  ) {
     final dados = toStringDynamicMap(grupo[refeicao]);
 
     return TableRow(
@@ -2570,7 +4079,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget tableCell(String text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Text(text, textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)),
+      child: Text(
+        text,
+        textAlign: TextAlign.right,
+        style: const TextStyle(fontSize: 12),
+      ),
     );
   }
 
@@ -2580,7 +4093,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.navy),
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: AppColors.navy,
+        ),
       ),
     );
   }
@@ -2627,7 +4144,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     }
   }
 
-
   Widget buildEscalaDashboardPage() {
     final eventos = eventosPrincipaisDaEscala();
     agendarAutoScrollEscala(eventos);
@@ -2638,22 +4154,75 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           ? 'Importe sua escala mensal para acompanhar seus voos.'
           : 'Última escala importada: $selectedFileName',
       icon: Icons.flight_takeoff_outlined,
-      child: ListView(
-        padding: EdgeInsets.zero,
+      child: Column(
         children: [
-          buildEscalaWelcomeCard(),
-          const SizedBox(height: 22),
-          buildEscalaPeriodoSelector(),
-          const SizedBox(height: 22),
-          buildEscalaResumoRapido(),
-          const SizedBox(height: 22),
-          if (eventos.isEmpty)
-            buildEscalaEmptyState()
-          else
-            buildEscalaTimeline(eventos),
+          buildEscalaFloatingSummaryBar(),
+          const SizedBox(height: 10),
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (_) {
+                atualizarMesResumoPeloScroll();
+                return false;
+              },
+              child: ListView(
+                controller: escalaScrollController,
+                padding: EdgeInsets.zero,
+                children: [
+                  if (eventos.isEmpty)
+                    buildEscalaEmptyState()
+                  else
+                    buildEscalaTimeline(eventos),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Widget buildEscalaFloatingSummaryBar() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(children: [buildEscalaResumoRapido()]),
+    );
+  }
+
+  void atualizarMesResumoPeloScroll() {
+    if (escalaDiaKeys.isEmpty) return;
+
+    String? melhorData;
+    var melhorDistancia = double.infinity;
+    for (final entry in escalaDiaKeys.entries) {
+      final context = entry.value.currentContext;
+      if (context == null) continue;
+      final box = context.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) continue;
+      final y = box.localToGlobal(Offset.zero).dy;
+      final distancia = (y - 190).abs();
+      if (distancia < melhorDistancia) {
+        melhorDistancia = distancia;
+        melhorData = entry.key;
+      }
+    }
+
+    final data = melhorData == null ? null : parseDataPtBr(melhorData);
+    if (data == null) return;
+    final mesKey = '${data.year}-${data.month.toString().padLeft(2, '0')}';
+    if (mesKey == escalaMesResumoKey) return;
+    setState(() => escalaMesResumoKey = mesKey);
   }
 
   Widget buildEscalaWelcomeCard() {
@@ -2665,40 +4234,52 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(
-              height: isMobile ? 38 : 44,
-              width: isMobile ? 132 : 150,
+              height: isMobile ? 28 : 34,
+              width: isMobile ? 112 : 132,
               child: Image.asset(
                 'assets/logo_crew4u.png',
                 fit: BoxFit.contain,
                 alignment: Alignment.centerLeft,
                 errorBuilder: (context, error, stackTrace) {
-                  return buildTextLogo(fontSize: isMobile ? 23 : 25, fourSize: isMobile ? 34 : 39, dark: false);
+                  return buildTextLogo(
+                    fontSize: isMobile ? 23 : 25,
+                    fourSize: isMobile ? 34 : 39,
+                    dark: false,
+                  );
                 },
               ),
             ),
-            SizedBox(height: isMobile ? 16 : 20),
+            SizedBox(height: isMobile ? 10 : 12),
             RichText(
               text: TextSpan(
                 children: [
                   TextSpan(
                     text: 'Olá, ',
-                    style: TextStyle(color: Colors.white, fontSize: isMobile ? 30 : 34, fontWeight: FontWeight.w400),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: isMobile ? 26 : 30,
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
                   TextSpan(
                     text: 'Rafael',
-                    style: TextStyle(color: AppColors.blue, fontSize: isMobile ? 30 : 34, fontWeight: FontWeight.w900),
+                    style: TextStyle(
+                      color: AppColors.blue,
+                      fontSize: isMobile ? 26 : 30,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 7),
             Text(
               selectedFileName == null
                   ? 'Importe sua escala para visualizar a rotina de voo.'
                   : 'Sua escala está pronta para consulta offline no navegador. A aba Salário usa estes dados para calcular o holerite.',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.70),
-                fontSize: isMobile ? 13 : 15,
+                fontSize: isMobile ? 12 : 14,
                 fontWeight: FontWeight.w600,
                 height: 1.4,
               ),
@@ -2716,20 +4297,32 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.calendar_month_outlined, color: Colors.white, size: 19),
+              const Icon(
+                Icons.calendar_month_outlined,
+                color: Colors.white,
+                size: 19,
+              ),
               const SizedBox(width: 8),
               Text(
                 mesReferenciaEscala(),
-                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, color: Colors.white70, size: 18),
+              const Icon(
+                Icons.keyboard_arrow_down,
+                color: Colors.white70,
+                size: 18,
+              ),
             ],
           ),
         );
 
         return Container(
-          padding: EdgeInsets.all(isMobile ? 22 : 26),
+          padding: EdgeInsets.all(isMobile ? 18 : 22),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
@@ -2749,11 +4342,25 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           child: Stack(
             children: [
               Positioned(
-                right: isMobile ? -16 : 18,
-                bottom: isMobile ? -18 : -12,
+                right: isMobile ? -54 : -18,
+                bottom: isMobile ? -48 : -52,
                 child: Opacity(
-                  opacity: 0.09,
-                  child: Icon(Icons.flight_takeoff, size: isMobile ? 110 : 155, color: AppColors.cyan),
+                  opacity: 0.035,
+                  child: SizedBox(
+                    width: isMobile ? 190 : 280,
+                    height: isMobile ? 120 : 176,
+                    child: Image.asset(
+                      'assets/logo_crew4u.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return Icon(
+                          Icons.flight_takeoff,
+                          size: isMobile ? 110 : 155,
+                          color: AppColors.cyan,
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ),
               isMobile
@@ -2761,7 +4368,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         mainContent,
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
                         monthPill,
                       ],
                     )
@@ -2779,16 +4386,516 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
+  Widget buildEscalaMesCompactSelector() {
+    final meses = mesesHistoricoOrdenados();
+    final mesAtual = selectedEscalaMesKey ?? mesKeyDosEventos(escalaEventos);
+    final temHistorico = meses.isNotEmpty;
+
+    return Container(
+      height: 32,
+      padding: const EdgeInsets.symmetric(horizontal: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.calendar_month_outlined,
+            color: AppColors.cyan,
+            size: 14,
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value:
+                    temHistorico && mesAtual != null && meses.contains(mesAtual)
+                    ? mesAtual
+                    : null,
+                hint: Text(
+                  mesAtual == null ? 'Nenhum mês salvo' : labelMesKey(mesAtual),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                dropdownColor: AppColors.navy2,
+                iconEnabledColor: Colors.white70,
+                isDense: true,
+                isExpanded: true,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                ),
+                items: meses
+                    .map(
+                      (mes) => DropdownMenuItem(
+                        value: mes,
+                        child: Text(labelMesKey(mes)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: temHistorico
+                    ? (mes) {
+                        if (mes == null) return;
+                        final dados = escalaHistoricoMensal[mes] ?? {};
+                        final tipo = dados[selectedEscalaTipo] != null
+                            ? selectedEscalaTipo
+                            : dados['executada'] != null
+                            ? 'executada'
+                            : 'planejada';
+                        selecionarEscalaHistorico(mes, tipo);
+                      }
+                    : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            selectedEscalaTipo == 'planejada' ? 'Planejada' : 'Executada',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.68),
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildProximaAtividadeCard(List<Map<String, String>> eventos) {
+    if (eventos.isEmpty) return const SizedBox.shrink();
+
+    final agora = DateTime.now();
+    final ordenados = [...eventos]
+      ..sort((a, b) {
+        final dataA =
+            inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+        final dataB =
+            inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+        return dataA.compareTo(dataB);
+      });
+
+    Map<String, String> alvo = ordenados.first;
+    for (final event in ordenados) {
+      final inicio = inicioEventoDateTime(event);
+      final fim = fimEventoDateTime(event);
+      if (inicio == null && fim == null) continue;
+      final inicioEfetivo = inicio ?? fim!;
+      final fimEfetivo = fim ?? inicioEfetivo;
+      if (!fimEfetivo.isBefore(agora)) {
+        alvo = event;
+        break;
+      }
+    }
+
+    final tipo = (alvo['tipo'] ?? '').toUpperCase();
+    final isFolga = ehFolgaOuDayOff(alvo);
+    final inicio = inicioEventoDateTime(alvo);
+    final fim = fimEventoDateTime(alvo);
+    final origem = alvo['origem'] ?? '';
+    final destino = alvo['destino'] ?? '';
+    final id = alvo['identificacao'] ?? '';
+    final dutyReport = horarioLimpo(alvo['duty_report'] ?? '');
+    final title = isFolga
+        ? 'Dia livre'
+        : tipo == 'VOO'
+        ? '$origem → $destino'
+        : tipo.contains('RESERVA')
+        ? 'Reserva $id'
+        : tipo.contains('SOBREAVISO')
+        ? 'Sobreaviso $id'
+        : id;
+    final subtitle = isFolga
+        ? 'Folga confirmada na escala'
+        : dutyReport.isNotEmpty
+        ? 'Apresentação $dutyReport'
+        : formatarIntervaloEvento(
+            limparHoraParaExibicao(alvo['saida'] ?? ''),
+            limparHoraParaExibicao(alvo['chegada'] ?? ''),
+          );
+    final tempo = textoTempoAteAtividade(inicio, fim);
+    final accent = isFolga
+        ? AppColors.green
+        : tipo == 'VOO'
+        ? AppColors.blue
+        : tipo.contains('RESERVA')
+        ? const Color(0xFFE53935)
+        : const Color(0xFFF6B21A);
+    final icon = isFolga
+        ? Icons.weekend_outlined
+        : tipo == 'VOO'
+        ? Icons.flight_takeoff_outlined
+        : tipo.contains('RESERVA')
+        ? Icons.event_available_outlined
+        : Icons.notifications_active_outlined;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 680;
+        return Container(
+          padding: EdgeInsets.all(isMobile ? 14 : 16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: isMobile ? 44 : 50,
+                height: isMobile ? 44 : 50,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(17),
+                  border: Border.all(color: accent.withValues(alpha: 0.30)),
+                ),
+                child: Icon(icon, color: accent, size: isMobile ? 23 : 26),
+              ),
+              SizedBox(width: isMobile ? 12 : 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Agora / Próxima atividade',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.60),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isMobile ? 18 : 21,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.68),
+                        fontSize: isMobile ? 12 : 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.10),
+                  ),
+                ),
+                child: Text(
+                  tempo,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildEscalaHistoricoSelector({bool compactSalaryMode = false}) {
+    final meses = mesesHistoricoOrdenados();
+    final mesAtual = selectedEscalaMesKey;
+    final mesSelecionado = mesAtual != null && meses.contains(mesAtual)
+        ? mesAtual
+        : (meses.isNotEmpty ? meses.first : null);
+    final dadosMes = escalaHistoricoMensal[mesSelecionado] ?? {};
+    final temPlanejada = dadosMes['planejada'] != null;
+    final temExecutada = dadosMes['executada'] != null;
+    final comparativo = textoComparativoPlanejadaExecutada(dadosMes);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 680;
+        return Container(
+          padding: EdgeInsets.all(compactSalaryMode ? 7 : (isMobile ? 10 : 12)),
+          decoration: BoxDecoration(
+            color: compactSalaryMode
+                ? const Color(0xFF071A34)
+                : Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(compactSalaryMode ? 16 : 22),
+            border: Border.all(
+              color: compactSalaryMode
+                  ? AppColors.cyan.withValues(alpha: 0.45)
+                  : Colors.white.withValues(alpha: 0.12),
+            ),
+            boxShadow: compactSalaryMode
+                ? [
+                    BoxShadow(
+                      color: AppColors.blue.withValues(alpha: 0.18),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : [],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Flex(
+                direction: isMobile ? Axis.vertical : Axis.horizontal,
+                crossAxisAlignment: isMobile
+                    ? CrossAxisAlignment.stretch
+                    : CrossAxisAlignment.center,
+                children: [
+                  buildMesHistoricoDropdown(meses, mesSelecionado),
+                  SizedBox(width: isMobile ? 0 : 8, height: isMobile ? 6 : 0),
+                  buildTipoEscalaSlider(
+                    temPlanejada: temPlanejada,
+                    temExecutada: temExecutada,
+                  ),
+                ],
+              ),
+              if (comparativo.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.compare_arrows_outlined,
+                      color: AppColors.cyan,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        comparativo,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.74),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildMesHistoricoDropdown(List<String> meses, String? mesSelecionado) {
+    final enabled = meses.isNotEmpty;
+    final fallbackMes = selectedEscalaMesKey ?? mesKeyDosEventos(escalaEventos);
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: enabled ? 0.13 : 0.07),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.18)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: enabled ? mesSelecionado : null,
+          hint: Text(
+            fallbackMes == null
+                ? 'Nenhum mês salvo'
+                : '${labelMesKey(fallbackMes)} não salvo',
+          ),
+          dropdownColor: AppColors.navy2,
+          iconEnabledColor: Colors.white70,
+          isExpanded: true,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+          ),
+          items: meses.map((mes) {
+            return DropdownMenuItem(value: mes, child: Text(labelMesKey(mes)));
+          }).toList(),
+          onChanged: enabled
+              ? (mes) {
+                  if (mes == null) return;
+                  final dados = escalaHistoricoMensal[mes] ?? {};
+                  final tipo = dados[selectedEscalaTipo] != null
+                      ? selectedEscalaTipo
+                      : dados['executada'] != null
+                      ? 'executada'
+                      : 'planejada';
+                  selecionarEscalaHistorico(mes, tipo);
+                }
+              : null,
+        ),
+      ),
+    );
+  }
+
+  Widget buildTipoEscalaSlider({
+    required bool temPlanejada,
+    required bool temExecutada,
+  }) {
+    final selectedExecutada = selectedEscalaTipo == 'executada';
+    final enabled =
+        selectedEscalaMesKey != null && (temPlanejada || temExecutada);
+
+    return Container(
+      height: 34,
+      constraints: const BoxConstraints(minWidth: 188, maxWidth: 240),
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.34)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.cyan.withValues(alpha: 0.12),
+            blurRadius: 12,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: selectedExecutada
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
+            child: FractionallySizedBox(
+              widthFactor: 0.5,
+              heightFactor: 1,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: enabled
+                      ? const LinearGradient(
+                          colors: [Color(0xFF0F7DFF), Color(0xFF24D6FF)],
+                        )
+                      : null,
+                  color: enabled ? null : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: enabled
+                      ? [
+                          BoxShadow(
+                            color: AppColors.cyan.withValues(alpha: 0.34),
+                            blurRadius: 12,
+                          ),
+                        ]
+                      : [],
+                ),
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              buildTipoEscalaSliderOption('planejada', temPlanejada),
+              buildTipoEscalaSliderOption('executada', temExecutada),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildTipoEscalaSliderOption(String tipo, bool enabled) {
+    final selected = selectedEscalaTipo == tipo;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: enabled && selectedEscalaMesKey != null
+            ? () => selecionarEscalaHistorico(selectedEscalaMesKey!, tipo)
+            : null,
+        child: Center(
+          child: Text(
+            labelTipoEscala(tipo),
+            style: TextStyle(
+              color: enabled
+                  ? Colors.white
+                  : Colors.white.withValues(alpha: 0.34),
+              fontSize: 11,
+              fontWeight: selected ? FontWeight.w900 : FontWeight.w800,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String textoComparativoPlanejadaExecutada(Map<String, dynamic> dadosMes) {
+    final planejada = toStringDynamicMap(dadosMes['planejada']);
+    final executada = toStringDynamicMap(dadosMes['executada']);
+    if (planejada.isEmpty || executada.isEmpty) return '';
+
+    final salarioPlanejado = toDouble(planejada['salarioLiquido']);
+    final salarioExecutado = toDouble(executada['salarioLiquido']);
+    if (salarioPlanejado <= 0 || salarioExecutado <= 0) return '';
+
+    final maior = salarioPlanejado >= salarioExecutado
+        ? salarioPlanejado
+        : salarioExecutado;
+    final origem = salarioPlanejado >= salarioExecutado
+        ? 'planejada'
+        : 'executada';
+    final diferenca = (salarioExecutado - salarioPlanejado).abs();
+
+    return 'Planejada x Executada: maior líquido ${formatarMoeda(maior, 'BRL')} (${labelTipoEscala(origem)}), diferença ${formatarMoeda(diferenca, 'BRL')}.';
+  }
+
+  String textoTempoAteAtividade(DateTime? inicio, DateTime? fim) {
+    final agora = DateTime.now();
+    if (inicio != null &&
+        fim != null &&
+        !agora.isBefore(inicio) &&
+        !agora.isAfter(fim)) {
+      return 'Em andamento';
+    }
+    if (inicio == null) return 'Na escala';
+    final diff = inicio.difference(agora);
+    if (diff.inMinutes.abs() < 1) return 'Agora';
+    if (diff.isNegative) return 'Já passou';
+    if (diff.inDays >= 1) return 'Em ${diff.inDays}d';
+    final horas = diff.inHours;
+    final minutos = diff.inMinutes % 60;
+    if (horas <= 0) return 'Em ${minutos}min';
+    return 'Em ${horas}h${minutos.toString().padLeft(2, '0')}';
+  }
+
   Widget buildEscalaPeriodoSelector() {
     final periodos = ['Hoje', 'Semana', 'Mês'];
 
     return Container(
-      height: 58,
-      padding: const EdgeInsets.all(6),
+      height: 22,
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: Colors.white.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: Row(
         children: periodos.map((periodo) {
@@ -2799,19 +4906,25 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               borderRadius: BorderRadius.circular(999),
               onTap: () => setState(() => escalaPeriodo = periodo),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
+                duration: const Duration(milliseconds: 160),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  gradient: selected ? const LinearGradient(colors: [AppColors.blue, AppColors.cyan]) : null,
+                  gradient: selected
+                      ? const LinearGradient(
+                          colors: [AppColors.blue, AppColors.cyan],
+                        )
+                      : null,
                   color: selected ? null : Colors.white.withValues(alpha: 0.78),
                   borderRadius: BorderRadius.circular(999),
-                  border: selected ? null : Border.all(color: Colors.white.withValues(alpha: 0.30)),
+                  border: selected
+                      ? null
+                      : Border.all(color: Colors.white.withValues(alpha: 0.30)),
                   boxShadow: selected
                       ? [
                           BoxShadow(
-                            color: AppColors.blue.withValues(alpha: 0.25),
-                            blurRadius: 18,
-                            offset: const Offset(0, 8),
+                            color: AppColors.blue.withValues(alpha: 0.14),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
                           ),
                         ]
                       : [],
@@ -2820,7 +4933,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   periodo,
                   style: TextStyle(
                     color: selected ? Colors.white : AppColors.navy,
-                    fontSize: 15,
+                    fontSize: 10,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -2834,8 +4947,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   Widget buildEscalaResumoRapido() {
     final resumoPeriodo = calcularResumoDoPeriodoSelecionado();
-    final horasVoo = formatarMinutosComoHoras(resumoPeriodo['minutos_voo'] ?? 0);
-    final kmTotal = resumoPeriodo['km'] ?? 0;
+    final horasVoo = formatarMinutosComoHoras(
+      resumoPeriodo['minutos_voo'] ?? 0,
+    );
+    final horasUltimos28Dias = formatarMinutosComoHoras(
+      calcularMinutosVooUltimos28Dias(),
+    );
     final reservas = resumoPeriodo['reservas'] ?? 0;
     final sobreavisos = resumoPeriodo['sobreavisos'] ?? 0;
     final folgas = resumoPeriodo['folgas'] ?? 0;
@@ -2844,106 +4961,54 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < 680;
-        final cardWidth = isMobile ? (constraints.maxWidth - 8) / 2 : (constraints.maxWidth - 48) / 5;
+        final isCompact = constraints.maxWidth < 980;
 
-        final cards = Wrap(
-          spacing: isMobile ? 8 : 12,
-          runSpacing: isMobile ? 8 : 12,
+        final metricCards = [
+          buildEscalaMetricCard(
+            icon: Icons.schedule_outlined,
+            title: 'Horas',
+            value: horasVoo,
+            subtitle: contexto,
+            compact: isCompact,
+          ),
+          buildEscalaMetricCard(
+            icon: Icons.history_outlined,
+            title: '28 dias',
+            value: horasUltimos28Dias,
+            subtitle: 'voadas',
+            compact: isCompact,
+          ),
+          buildEscalaMetricCard(
+            icon: Icons.event_available_outlined,
+            title: 'Reservas',
+            value: reservas.toString(),
+            subtitle: contexto,
+            compact: isCompact,
+          ),
+          buildEscalaMetricCard(
+            icon: Icons.notifications_active_outlined,
+            title: 'Sobreav.',
+            value: sobreavisos.toString(),
+            subtitle: contexto,
+            compact: isCompact,
+          ),
+          buildEscalaMetricCard(
+            icon: Icons.weekend_outlined,
+            title: 'Folgas',
+            value: folgas.toString(),
+            subtitle: contexto,
+            compact: isCompact,
+          ),
+        ];
+
+        final gap = isMobile ? 4.0 : 7.0;
+        return Row(
           children: [
-            SizedBox(
-              width: cardWidth,
-              child: buildEscalaMetricCard(
-                icon: Icons.schedule_outlined,
-                title: 'Horas de voo',
-                value: horasVoo,
-                subtitle: contexto,
-              ),
-            ),
-            SizedBox(
-              width: cardWidth,
-              child: buildEscalaMetricCard(
-                icon: Icons.route_outlined,
-                title: 'Km voados',
-                value: formatarNumeroInteiro(kmTotal),
-                subtitle: contexto,
-              ),
-            ),
-            SizedBox(
-              width: cardWidth,
-              child: buildEscalaMetricCard(
-                icon: Icons.event_available_outlined,
-                title: 'Reservas',
-                value: reservas.toString(),
-                subtitle: contexto,
-              ),
-            ),
-            SizedBox(
-              width: cardWidth,
-              child: buildEscalaMetricCard(
-                icon: Icons.notifications_active_outlined,
-                title: 'Sobreavisos',
-                value: sobreavisos.toString(),
-                subtitle: contexto,
-              ),
-            ),
-            SizedBox(
-              width: cardWidth,
-              child: buildEscalaMetricCard(
-                icon: Icons.weekend_outlined,
-                title: 'Folgas',
-                value: folgas.toString(),
-                subtitle: contexto,
-              ),
-            ),
-          ],
-        );
-
-        if (!isMobile) return cards;
-
-        return Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-          ),
-          child: Column(
-            children: [
-              InkWell(
-                borderRadius: BorderRadius.circular(22),
-                onTap: () => setState(() => resumoEscalaAberto = !resumoEscalaAberto),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.dashboard_customize_outlined, color: AppColors.cyan, size: 20),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Resumo da escala • $contexto',
-                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
-                        ),
-                      ),
-                      Text(
-                        resumoEscalaAberto ? 'Ocultar' : 'Ver',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.70), fontSize: 12, fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(width: 6),
-                      Icon(resumoEscalaAberto ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, color: Colors.white70),
-                    ],
-                  ),
-                ),
-              ),
-              AnimatedCrossFade(
-                firstChild: const SizedBox.shrink(),
-                secondChild: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: cards,
-                ),
-                crossFadeState: resumoEscalaAberto ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                duration: const Duration(milliseconds: 180),
-              ),
+            for (var i = 0; i < metricCards.length; i++) ...[
+              Expanded(child: metricCards[i]),
+              if (i != metricCards.length - 1) SizedBox(width: gap),
             ],
-          ),
+          ],
         );
       },
     );
@@ -2954,18 +5019,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     required String title,
     required String value,
     required String subtitle,
+    bool compact = false,
   }) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 7),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [AppColors.navy, AppColors.navy2]),
-        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          colors: [AppColors.navy, AppColors.navy2],
+        ),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
         boxShadow: [
           BoxShadow(
             color: AppColors.navy.withValues(alpha: 0.08),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -2975,36 +5043,51 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Row(
             children: [
               Container(
-                width: 34,
-                height: 34,
+                width: compact ? 18 : 20,
+                height: compact ? 18 : 20,
                 decoration: BoxDecoration(
                   color: AppColors.blue,
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: Icon(icon, color: Colors.white, size: 18),
+                child: Icon(icon, color: Colors.white, size: compact ? 10 : 11),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 4),
               Expanded(
                 child: Text(
                   title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.72),
-                    fontSize: 13,
+                    fontSize: compact ? 8 : 9,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(
-            value,
-            style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
-          ),
           const SizedBox(height: 4),
           Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: compact ? 12 : 14,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0,
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
             subtitle,
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 13, fontWeight: FontWeight.w600),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.55),
+              fontSize: compact ? 7 : 8,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -3024,18 +5107,30 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 color: AppColors.softBlue,
                 borderRadius: BorderRadius.circular(22),
               ),
-              child: const Icon(Icons.upload_file_outlined, color: AppColors.blue, size: 34),
+              child: const Icon(
+                Icons.upload_file_outlined,
+                color: AppColors.blue,
+                size: 34,
+              ),
             ),
             const SizedBox(height: 18),
             const Text(
               'Nenhuma escala importada ainda',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppColors.navy),
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+                color: AppColors.navy,
+              ),
             ),
             const SizedBox(height: 8),
             const Text(
               'Clique em “Importar escala” no canto superior direito para carregar o Excel e gerar sua linha do tempo.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFF617086), fontSize: 15, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: Color(0xFF617086),
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 22),
             PrimaryButton(
@@ -3070,20 +5165,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         final isMobile = constraints.maxWidth < 620;
 
         final dateBox = SizedBox(
-          width: isMobile ? 58 : 76,
+          width: isMobile ? 44 : 62,
           child: Column(
             children: [
               Text(
                 semana,
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.62), fontSize: isMobile ? 11 : 13, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.62),
+                  fontSize: isMobile ? 9 : 11,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               Text(
                 dia,
-                style: TextStyle(color: Colors.white, fontSize: isMobile ? 29 : 34, fontWeight: FontWeight.w900, letterSpacing: -1),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: isMobile ? 23 : 28,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -1,
+                ),
               ),
               Text(
                 mes,
-                style: TextStyle(color: AppColors.blue, fontSize: isMobile ? 12 : 14, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  color: AppColors.blue,
+                  fontSize: isMobile ? 10 : 12,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ],
           ),
@@ -3091,17 +5199,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
         return Container(
           key: escalaDiaKeys.putIfAbsent(data, () => GlobalKey()),
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: EdgeInsets.all(isMobile ? 12 : 16),
+          margin: const EdgeInsets.only(bottom: 7),
+          padding: EdgeInsets.all(isMobile ? 6 : 9),
           decoration: BoxDecoration(
             color: const Color(0xFF071A34).withValues(alpha: 0.82),
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(color: AppColors.blue.withValues(alpha: 0.16)),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.20),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
               ),
             ],
           ),
@@ -3109,12 +5217,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               dateBox,
-              Container(width: 1, height: (eventos.length * 88).clamp(88, 300).toDouble(), color: AppColors.blue.withValues(alpha: 0.24)),
-              SizedBox(width: isMobile ? 10 : 16),
+              Container(
+                width: 1,
+                height: (eventos.length * 46).clamp(46, 178).toDouble(),
+                color: AppColors.blue.withValues(alpha: 0.24),
+              ),
+              SizedBox(width: isMobile ? 6 : 9),
               Expanded(
-                child: Column(
-                  children: buildEventosComApresentacao(eventos),
-                ),
+                child: Column(children: buildEventosComApresentacao(eventos)),
               ),
             ],
           ),
@@ -3126,20 +5236,41 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   List<Widget> buildEventosComApresentacao(List<Map<String, String>> eventos) {
     final widgets = <Widget>[];
     String? ultimoDutyReport;
+    int? indiceInicioJornada;
 
     for (var i = 0; i < eventos.length; i++) {
       final event = eventos[i];
       final dutyReport = horarioLimpo(event['duty_report'] ?? '');
       final tipoAtual = (event['tipo'] ?? '').toUpperCase().trim();
-      final deveMostrarApresentacao = tipoAtual == 'VOO' && dutyReport.isNotEmpty && dutyReport != ultimoDutyReport;
+      final deveMostrarApresentacao =
+          tipoAtual == 'VOO' &&
+          dutyReport.isNotEmpty &&
+          dutyReport != ultimoDutyReport;
 
       if (deveMostrarApresentacao) {
-        final analise = calcularLimiteJornadaDaEscala(eventos, i, dutyReport);
-        widgets.add(buildDutyReportBanner(dutyReport, analise));
+        widgets.add(buildDutyReportBanner(dutyReport));
         ultimoDutyReport = dutyReport;
+        indiceInicioJornada = i;
       }
 
       widgets.add(buildEventoEscalaRow(event));
+
+      final proximo = i + 1 < eventos.length ? eventos[i + 1] : null;
+      final proximoDuty = horarioLimpo(proximo?['duty_report'] ?? '');
+      final fimDaJornada =
+          tipoAtual == 'VOO' &&
+          ultimoDutyReport != null &&
+          (proximo == null ||
+              (proximoDuty.isNotEmpty && proximoDuty != ultimoDutyReport));
+
+      if (fimDaJornada && indiceInicioJornada != null) {
+        final analise = calcularLimiteJornadaDaEscala(
+          eventos,
+          indiceInicioJornada,
+          ultimoDutyReport,
+        );
+        widgets.add(buildEncerramentoJornadaBanner(analise));
+      }
     }
 
     return widgets;
@@ -3155,9 +5286,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final minutosReport = parseHoraMinuto(dutyReport);
 
     if (dataBase == null || minutosReport == null) {
-      return {
-        'disponivel': false,
-      };
+      return {'disponivel': false};
     }
 
     var etapas = 0;
@@ -3211,71 +5340,111 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     };
   }
 
-  Widget buildDutyReportBanner(String dutyReport, Map<String, dynamic> analise) {
-    final disponivel = analise['disponivel'] == true;
-    final terminoTexto = disponivel ? analise['termino_texto'].toString() : '';
-
+  Widget buildDutyReportBanner(String dutyReport) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
       decoration: BoxDecoration(
         color: const Color(0xFF0D223D),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(11),
         border: Border.all(color: AppColors.cyan.withValues(alpha: 0.18)),
       ),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final compact = constraints.maxWidth < 560;
-        final limiteChip = disponivel
-            ? Container(
-                padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: compact ? 5 : 6),
-                decoration: BoxDecoration(
-                  color: AppColors.blue.withValues(alpha: 0.13),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: AppColors.blue.withValues(alpha: 0.28)),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 560;
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.login_outlined,
+                      color: AppColors.cyan,
+                      size: 13,
+                    ),
+                    const SizedBox(width: 5),
+                    const Text(
+                      'Apresentação',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      dutyReport,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.timelapse_outlined, size: compact ? 12 : 13, color: AppColors.cyan),
-                  const SizedBox(width: 5),
-                  Text(
-                    'Limite de jornada $terminoTexto',
-                    style: TextStyle(color: AppColors.cyan, fontSize: compact ? 10 : 11, fontWeight: FontWeight.w900),
-                  ),
-                ]),
-              )
-            : const SizedBox.shrink();
+              ],
+            );
+          }
 
-        if (compact) {
-          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Icon(Icons.login_outlined, color: AppColors.cyan, size: 16),
-              const SizedBox(width: 7),
-              const Text('Apresentação', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-              const Spacer(),
-              Text(dutyReport, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900)),
-            ]),
-            if (disponivel) ...[
-              const SizedBox(height: 7),
-              limiteChip,
+          return Row(
+            children: [
+              const Icon(Icons.login_outlined, color: AppColors.cyan, size: 14),
+              const SizedBox(width: 6),
+              const Text(
+                'Apresentação',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                dutyReport,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ],
-          ]);
-        }
-
-        return Row(children: [
-          const Icon(Icons.login_outlined, color: AppColors.cyan, size: 17),
-          const SizedBox(width: 8),
-          const Text('Apresentação', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-          const SizedBox(width: 10),
-          Text(dutyReport, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900)),
-          if (disponivel) ...[
-            const SizedBox(width: 12),
-            limiteChip,
-          ],
-        ]);
-      }),
+          );
+        },
+      ),
     );
   }
 
+  Widget buildEncerramentoJornadaBanner(Map<String, dynamic> analise) {
+    if (analise['disponivel'] != true) return const SizedBox.shrink();
+    final termino = analise['termino_texto']?.toString() ?? '';
+    if (termino.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4, left: 4, right: 4),
+      child: Row(
+        children: [
+          Icon(
+            Icons.flag_outlined,
+            color: Colors.white.withValues(alpha: 0.58),
+            size: 12,
+          ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(
+              'De acordo com sua apresentação, sua jornada deve encerrar às $termino local.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget buildJornadaLimitChip(IconData icon, String text) {
     return Container(
@@ -3328,7 +5497,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final tipo = (event['tipo'] ?? '').toUpperCase();
     final idUpper = (event['identificacao'] ?? '').toUpperCase();
     final isVoo = tipo == 'VOO';
-    final isSobreaviso = tipo.contains('SOBREAVISO') || idUpper.startsWith('HSB');
+    final isSobreaviso =
+        tipo.contains('SOBREAVISO') || idUpper.startsWith('HSB');
     final isReserva = tipo.contains('RESERVA') || idUpper.startsWith('ASB');
     final isFolga = ehFolgaOuDayOff(event);
     final origem = event['origem'] ?? '';
@@ -3369,18 +5539,30 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         final isMobile = constraints.maxWidth < 520;
 
         final tag = Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 12, vertical: isMobile ? 8 : 9),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 6 : 8,
+            vertical: isMobile ? 4 : 5,
+          ),
           decoration: BoxDecoration(
             color: color.withValues(alpha: isSobreaviso ? 0.92 : 1),
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [BoxShadow(color: color.withValues(alpha: 0.22), blurRadius: 12)],
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(color: color.withValues(alpha: 0.18), blurRadius: 8),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: isMobile ? 16 : 18),
-              const SizedBox(width: 7),
-              Text(label, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: isMobile ? 12 : 13)),
+              Icon(icon, color: Colors.white, size: isMobile ? 12 : 14),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: isMobile ? 10 : 11,
+                ),
+              ),
             ],
           ),
         );
@@ -3391,8 +5573,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 children: [
                   buildAirportTime(saida, origem, compact: isMobile),
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 14),
-                    child: const Icon(Icons.arrow_forward, color: AppColors.blue, size: 24),
+                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 5 : 9),
+                    child: const Icon(
+                      Icons.arrow_forward,
+                      color: AppColors.blue,
+                      size: 18,
+                    ),
                   ),
                   buildAirportTime(chegada, destino, compact: isMobile),
                 ],
@@ -3401,76 +5587,548 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.white, fontSize: isMobile ? 15 : 18, fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: isMobile ? 11 : 13,
+                  fontWeight: FontWeight.w800,
+                ),
               );
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 14, vertical: isMobile ? 10 : 12),
+        final row = Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 6 : 9,
+            vertical: isMobile ? 5 : 7,
+          ),
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.055),
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
           ),
           child: isMobile
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Row(
-                      children: [
-                        tag,
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            id,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900),
-                          ),
+                    tag,
+                    const SizedBox(width: 6),
+                    SizedBox(
+                      width: 58,
+                      child: Text(
+                        id,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
                         ),
-                        const Icon(Icons.chevron_right, color: Colors.white54),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        if (duracaoTexto.isNotEmpty) buildDurationChip(duracaoTexto, color, compact: true),
-                        const Spacer(),
-                        Flexible(child: Align(alignment: Alignment.centerRight, child: routeContent)),
-                      ],
+                    if (duracaoTexto.isNotEmpty) ...[
+                      const SizedBox(width: 4),
+                      buildDurationChip(duracaoTexto, color, compact: true),
+                    ],
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: routeContent,
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white38,
+                      size: 18,
                     ),
                   ],
                 )
               : Row(
                   children: [
                     tag,
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 9),
                     SizedBox(
-                      width: 92,
+                      width: 76,
                       child: Text(
                         id,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
                     if (duracaoTexto.isNotEmpty) ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       buildDurationChip(duracaoTexto, color),
                     ],
-                    Expanded(child: Align(alignment: Alignment.centerRight, child: routeContent)),
-                    const SizedBox(width: 12),
-                    const Icon(Icons.chevron_right, color: Colors.white54),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: routeContent,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white38,
+                      size: 20,
+                    ),
                   ],
                 ),
+        );
+
+        if (!isVoo) return row;
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: () => abrirDetalheVoo(event),
+            child: row,
+          ),
         );
       },
     );
   }
 
+  void abrirDetalheVoo(Map<String, String> event) {
+    final origem = event['origem'] ?? '';
+    final destino = event['destino'] ?? '';
+    final id = event['identificacao'] ?? '';
+
+    unawaited(atualizarMeteoVoo(event, origem: true));
+    unawaited(atualizarMeteoVoo(event, origem: false));
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void refreshMeteo({required bool origem}) {
+              atualizarMeteoVoo(event, origem: origem).whenComplete(() {
+                if (mounted) setModalState(() {});
+              });
+              setModalState(() {});
+            }
+
+            return DraggableScrollableSheet(
+              initialChildSize: 0.72,
+              minChildSize: 0.42,
+              maxChildSize: 0.92,
+              builder: (context, controller) {
+                return Container(
+                  decoration: const BoxDecoration(
+                    color: AppColors.navy,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(30),
+                    ),
+                  ),
+                  child: DefaultTabController(
+                    length: 2,
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 10),
+                        Container(
+                          width: 42,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [AppColors.blue, AppColors.cyan],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(
+                                  Icons.flight_takeoff,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      id.isEmpty ? 'Voo' : id,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    Text(
+                                      '$origem → $destino • ${event['data'] ?? ''}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.64,
+                                        ),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TabBar(
+                          labelColor: AppColors.cyan,
+                          unselectedLabelColor: Colors.white54,
+                          indicatorColor: AppColors.cyan,
+                          tabs: const [
+                            Tab(text: 'Tripulação'),
+                            Tab(text: 'Meteorologia'),
+                          ],
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            children: [
+                              ListView(
+                                controller: controller,
+                                padding: const EdgeInsets.all(18),
+                                children: [buildTripulacaoVooTab(event)],
+                              ),
+                              ListView(
+                                controller: controller,
+                                padding: const EdgeInsets.all(18),
+                                children: [
+                                  buildMeteoVooTab(
+                                    event,
+                                    onRefreshOrigem: () =>
+                                        refreshMeteo(origem: true),
+                                    onRefreshDestino: () =>
+                                        refreshMeteo(origem: false),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget buildTripulacaoVooTab(Map<String, String> event) {
+    final nomes = [
+      event['comandante'] ?? '',
+      event['copiloto'] ?? '',
+      event['chefe_cabine'] ?? '',
+      event['comissarios'] ?? '',
+      event['tripulacao'] ?? '',
+    ].where((value) => value.trim().isNotEmpty).toList();
+
+    if (nomes.isEmpty) {
+      return buildFlightDetailCard(
+        icon: Icons.groups_2_outlined,
+        title: 'Tripulação designada',
+        child: Text(
+          'A escala importada ainda não trouxe os nomes da tripulação para este voo. Quando essa informação vier no Excel, ela aparece aqui direto.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.72),
+            fontSize: 14,
+            height: 1.4,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return buildFlightDetailCard(
+      icon: Icons.groups_2_outlined,
+      title: 'Tripulação designada',
+      child: Column(
+        children: nomes
+            .map(
+              (nome) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.person_outline,
+                      color: AppColors.cyan,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        nome,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+
+  Widget buildMeteoVooTab(
+    Map<String, String> event, {
+    required VoidCallback onRefreshOrigem,
+    required VoidCallback onRefreshDestino,
+  }) {
+    return Column(
+      children: [
+        buildAirportMeteoCard(event, origem: true, onRefresh: onRefreshOrigem),
+        const SizedBox(height: 12),
+        buildAirportMeteoCard(
+          event,
+          origem: false,
+          onRefresh: onRefreshDestino,
+        ),
+      ],
+    );
+  }
+
+  Widget buildAirportMeteoCard(
+    Map<String, String> event, {
+    required bool origem,
+    required VoidCallback onRefresh,
+  }) {
+    final codigo = origem ? event['origem'] ?? '' : event['destino'] ?? '';
+    final cacheKey = meteoKey(event, origem: origem);
+    final meteo = meteoCache[cacheKey];
+    final loading = meteoLoadingKeys.contains(cacheKey);
+    final temCoordenada =
+        toDouble(event[origem ? 'origem_lat' : 'destino_lat']) != 0 &&
+        toDouble(event[origem ? 'origem_lon' : 'destino_lon']) != 0;
+
+    return buildFlightDetailCard(
+      icon: origem ? Icons.flight_takeoff_outlined : Icons.flight_land_outlined,
+      title: origem ? 'Origem • $codigo' : 'Destino • $codigo',
+      trailing: IconButton(
+        tooltip: 'Atualizar meteorologia',
+        onPressed: loading || !temCoordenada ? null : onRefresh,
+        icon: Icon(
+          loading ? Icons.sync : Icons.refresh,
+          color: loading || !temCoordenada ? Colors.white30 : AppColors.cyan,
+        ),
+      ),
+      child: !temCoordenada
+          ? Text(
+              'Reimporte a escala para carregar coordenadas deste aeroporto e ativar a meteorologia.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.70),
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : meteo == null
+          ? Text(
+              loading ? 'Atualizando condições...' : 'Toque em atualizar.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.70),
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                buildMeteoChip(
+                  Icons.thermostat_outlined,
+                  '${formatarNumeroCurto(meteo['temperatura'])} °C',
+                ),
+                buildMeteoChip(
+                  Icons.air_outlined,
+                  '${formatarNumeroCurto(meteo['vento'])} km/h',
+                ),
+                buildMeteoChip(
+                  Icons.cloud_outlined,
+                  descricaoCodigoMeteo(toDouble(meteo['codigo']).round()),
+                ),
+                buildMeteoChip(
+                  Icons.update_outlined,
+                  meteo['atualizadoEm']?.toString() ?? '',
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget buildFlightDetailCard({
+    required IconData icon,
+    required String title,
+    required Widget child,
+    Widget? trailing,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: AppColors.cyan, size: 20),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              ?trailing,
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget buildMeteoChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.blue.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.blue.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.cyan, size: 15),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> atualizarMeteoVoo(
+    Map<String, String> event, {
+    required bool origem,
+  }) async {
+    final lat = toDouble(event[origem ? 'origem_lat' : 'destino_lat']);
+    final lon = toDouble(event[origem ? 'origem_lon' : 'destino_lon']);
+    if (lat == 0 || lon == 0) return;
+
+    final cacheKey = meteoKey(event, origem: origem);
+    if (meteoLoadingKeys.contains(cacheKey)) return;
+
+    setState(() => meteoLoadingKeys.add(cacheKey));
+
+    try {
+      final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
+        'latitude': lat.toString(),
+        'longitude': lon.toString(),
+        'current': 'temperature_2m,wind_speed_10m,weather_code',
+        'timezone': 'auto',
+      });
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      final current = toStringDynamicMap(decoded['current']);
+
+      if (!mounted) return;
+      setState(() {
+        meteoCache[cacheKey] = {
+          'temperatura': current['temperature_2m'],
+          'vento': current['wind_speed_10m'],
+          'codigo': current['weather_code'],
+          'atualizadoEm': horaAgoraCurta(),
+        };
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        meteoCache[cacheKey] = {
+          'temperatura': '--',
+          'vento': '--',
+          'codigo': -1,
+          'atualizadoEm': 'indisponível',
+        };
+      });
+    } finally {
+      if (mounted) setState(() => meteoLoadingKeys.remove(cacheKey));
+    }
+  }
+
+  String meteoKey(Map<String, String> event, {required bool origem}) {
+    final lado = origem ? 'origem' : 'destino';
+    return '${event['data']}_${event['identificacao']}_$lado';
+  }
+
+  String horaAgoraCurta() {
+    final agora = DateTime.now();
+    return '${agora.hour.toString().padLeft(2, '0')}:${agora.minute.toString().padLeft(2, '0')}';
+  }
+
+  String formatarNumeroCurto(dynamic value) {
+    final numero = toDouble(value);
+    if (numero == 0 && value?.toString() != '0') return '--';
+    if (numero == numero.roundToDouble()) return numero.round().toString();
+    return numero.toStringAsFixed(1);
+  }
+
+  String descricaoCodigoMeteo(int codigo) {
+    if (codigo < 0) return 'Indisponível';
+    if (codigo == 0) return 'Céu limpo';
+    if ([1, 2, 3].contains(codigo)) return 'Parcial';
+    if ([45, 48].contains(codigo)) return 'Nevoeiro';
+    if ([51, 53, 55, 56, 57].contains(codigo)) return 'Garoa';
+    if ([61, 63, 65, 66, 67, 80, 81, 82].contains(codigo)) return 'Chuva';
+    if ([71, 73, 75, 77, 85, 86].contains(codigo)) return 'Neve';
+    if ([95, 96, 99].contains(codigo)) return 'Temporal';
+    return 'Condição $codigo';
+  }
+
   Widget buildDurationChip(String text, Color color, {bool compact = false}) {
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? 8 : 9,
-        vertical: compact ? 4 : 5,
+        horizontal: compact ? 5 : 7,
+        vertical: compact ? 2 : 3,
       ),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
@@ -3480,13 +6138,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.schedule, color: color.withValues(alpha: 0.92), size: compact ? 12 : 13),
-          const SizedBox(width: 5),
+          Icon(
+            Icons.schedule,
+            color: color.withValues(alpha: 0.92),
+            size: compact ? 10 : 11,
+          ),
+          const SizedBox(width: 3),
           Text(
             text,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.68),
-              fontSize: compact ? 10 : 11,
+              fontSize: compact ? 9 : 10,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.1,
             ),
@@ -3531,7 +6193,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     final tipo = (event['tipo'] ?? '').toUpperCase();
     final isVoo = tipo == 'VOO';
-    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+    if (ehFolgaOuDayOff(event)) {
+      return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+    }
 
     final horaPreferida = primeiroHorarioValido([
       if (isVoo) event['saida'],
@@ -3546,7 +6210,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     if (minutos == null) return null;
 
     final extraDias = extrairOffsetDias(horaPreferida);
-    return DateTime(dataBase.year, dataBase.month, dataBase.day + extraDias, minutos ~/ 60, minutos % 60);
+    return DateTime(
+      dataBase.year,
+      dataBase.month,
+      dataBase.day + extraDias,
+      minutos ~/ 60,
+      minutos % 60,
+    );
   }
 
   DateTime? fimAtividadeDateTime(Map<String, String> event) {
@@ -3555,7 +6225,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     final tipo = (event['tipo'] ?? '').toUpperCase();
     final isVoo = tipo == 'VOO';
-    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+    if (ehFolgaOuDayOff(event)) {
+      return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+    }
 
     final horaPreferida = primeiroHorarioValido([
       if (isVoo) event['chegada'],
@@ -3571,9 +6243,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     if (minutos == null) return null;
 
     final extraDias = extrairOffsetDias(horaPreferida);
-    return DateTime(dataBase.year, dataBase.month, dataBase.day + extraDias, minutos ~/ 60, minutos % 60);
+    return DateTime(
+      dataBase.year,
+      dataBase.month,
+      dataBase.day + extraDias,
+      minutos ~/ 60,
+      minutos % 60,
+    );
   }
-
 
   String limparHoraParaExibicao(Object? value) {
     final text = value?.toString().trim() ?? '';
@@ -3596,24 +6273,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       children: [
         Text(
           time,
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.58), fontSize: compact ? 11 : 12, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.58),
+            fontSize: compact ? 9 : 10,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 1),
         Text(
           airport,
-          style: TextStyle(color: Colors.white, fontSize: compact ? 18 : 22, fontWeight: FontWeight.w900, letterSpacing: -0.4),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: compact ? 14 : 17,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.4,
+          ),
         ),
       ],
     );
   }
 
   List<Map<String, String>> eventosPrincipaisDaEscala() {
+    final eventosBase = eventosEscalaContinua();
     final referencia = referenciaPeriodoEscala();
     final inicioJanela = inicioDaJanelaEscala(referencia);
     final fimJanela = fimDaJanelaEscala(referencia);
-    final mesReferencia = mesAnoReferenciaEscala();
 
-    final base = escalaEventos.where((event) {
+    final base = eventosBase.where((event) {
       if (!ehEventoVisivelNaEscala(event)) return false;
 
       final inicio = inicioEventoDateTime(event);
@@ -3624,7 +6310,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final fimEfetivo = fim ?? inicioEfetivo;
 
       if (escalaPeriodo == 'Hoje') {
-        return mesmoDia(inicioEfetivo, referencia) || mesmoDia(fimEfetivo, referencia);
+        return mesmoDia(inicioEfetivo, referencia) ||
+            mesmoDia(fimEfetivo, referencia);
       }
 
       if (escalaPeriodo == 'Semana') {
@@ -3632,26 +6319,50 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             (fimJanela == null || !inicioEfetivo.isAfter(fimJanela));
       }
 
-      // No modo Mês a escala mostra o mês inteiro importado.
-      // A tela apenas rola automaticamente até hoje/próxima atividade.
-      if (mesReferencia != null) {
-        return inicioEfetivo.year == mesReferencia.year && inicioEfetivo.month == mesReferencia.month;
-      }
-
       return true;
     }).toList();
 
     base.sort((a, b) {
-      final dataA = inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
-      final dataB = inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+      final dataA =
+          inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+      final dataB =
+          inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
       return dataA.compareTo(dataB);
     });
 
     return base;
   }
 
+  List<Map<String, String>> eventosEscalaContinua() {
+    if (escalaHistoricoMensal.isEmpty) return escalaEventos;
+
+    final eventos = <Map<String, String>>[];
+    final meses = escalaHistoricoMensal.keys.toList()..sort();
+    for (final mesKey in meses) {
+      final mes = escalaHistoricoMensal[mesKey] ?? {};
+      final registro = toStringDynamicMap(mes['executada'] ?? mes['planejada']);
+      final rawEventos = registro['escalaEventos'] as List<dynamic>? ?? [];
+      for (final item in rawEventos) {
+        final map = toStringDynamicMap(item);
+        eventos.add(
+          map.map((key, value) => MapEntry(key, value?.toString() ?? '')),
+        );
+      }
+    }
+
+    if (eventos.isEmpty) return escalaEventos;
+    eventos.sort((a, b) {
+      final dataA =
+          inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+      final dataB =
+          inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+      return dataA.compareTo(dataB);
+    });
+    return eventos;
+  }
+
   void agendarAutoScrollEscala(List<Map<String, String>> eventos) {
-    if (selectedIndex != 0 || escalaPeriodo != 'Mês' || eventos.isEmpty) return;
+    if (selectedIndex != 0 || eventos.isEmpty) return;
 
     final alvo = dataAlvoScrollEscala(eventos);
     if (alvo == null || alvo == ultimaDataAutoScrollEscala) return;
@@ -3665,10 +6376,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
       Scrollable.ensureVisible(
         contextAlvo,
-        duration: const Duration(milliseconds: 520),
+        duration: const Duration(milliseconds: 620),
         curve: Curves.easeOutCubic,
-        alignment: 0.18,
+        alignment: 0.04,
       );
+      Future.delayed(const Duration(milliseconds: 680), () {
+        if (mounted) atualizarMesResumoPeloScroll();
+      });
       Future.delayed(const Duration(milliseconds: 650), () {
         if (!mounted) return;
         final retryContext = key?.currentContext;
@@ -3677,21 +6391,64 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           retryContext,
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
-          alignment: 0.18,
+          alignment: 0.04,
         );
+      });
+      Future.delayed(const Duration(milliseconds: 1300), () {
+        if (!mounted) return;
+        final retryContext = key?.currentContext;
+        if (retryContext == null) return;
+        Scrollable.ensureVisible(
+          retryContext,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          alignment: 0.04,
+        );
+        atualizarMesResumoPeloScroll();
       });
     });
   }
 
   String? dataAlvoScrollEscala(List<Map<String, String>> eventos) {
     final hoje = DateTime.now();
-    final datas = eventos
-        .map((event) => parseDataPtBr(event['data'] ?? ''))
-        .whereType<DateTime>()
-        .map((d) => DateTime(d.year, d.month, d.day))
-        .toSet()
-        .toList()
-      ..sort();
+    final agora = DateTime.now();
+    final ordenados = [...eventos]
+      ..sort((a, b) {
+        final dataA =
+            inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+        final dataB =
+            inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+        return dataA.compareTo(dataB);
+      });
+
+    for (final event in ordenados) {
+      final inicio = inicioEventoDateTime(event);
+      final fim = fimEventoDateTime(event);
+      if (inicio == null && fim == null) continue;
+      final inicioEfetivo = inicio ?? fim!;
+      final fimEfetivo = fim ?? inicioEfetivo;
+      if (!agora.isBefore(inicioEfetivo) && !agora.isAfter(fimEfetivo)) {
+        return event['data'];
+      }
+    }
+
+    for (final event in ordenados) {
+      final inicio = inicioEventoDateTime(event);
+      final fim = fimEventoDateTime(event);
+      final inicioEfetivo = inicio ?? fim;
+      if (inicioEfetivo != null && !inicioEfetivo.isBefore(agora)) {
+        return event['data'];
+      }
+    }
+
+    final datas =
+        eventos
+            .map((event) => parseDataPtBr(event['data'] ?? ''))
+            .whereType<DateTime>()
+            .map((d) => DateTime(d.year, d.month, d.day))
+            .toSet()
+            .toList()
+          ..sort();
 
     if (datas.isEmpty) return null;
 
@@ -3704,7 +6461,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     return formatarDataPtBr(datas.last);
   }
-
 
   bool ehEventoVisivelNaEscala(Map<String, String> event) {
     final tipo = (event['tipo'] ?? '').toUpperCase();
@@ -3719,18 +6475,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   DateTime inicioDaJanelaEscala(DateTime referencia) {
-    final mesReferencia = mesAnoReferenciaEscala();
-    if (mesReferencia != null) return DateTime(mesReferencia.year, mesReferencia.month, 1);
+    if (escalaPeriodo == 'Semana') {
+      return DateTime(referencia.year, referencia.month, referencia.day);
+    }
     return DateTime(referencia.year, referencia.month, 1);
   }
 
   DateTime? fimDaJanelaEscala(DateTime referencia) {
     if (escalaPeriodo == 'Hoje') {
-      return DateTime(referencia.year, referencia.month, referencia.day, 23, 59, 59);
+      return DateTime(
+        referencia.year,
+        referencia.month,
+        referencia.day,
+        23,
+        59,
+        59,
+      );
     }
 
     if (escalaPeriodo == 'Semana') {
-      return DateTime(referencia.year, referencia.month, referencia.day + 6, 23, 59, 59);
+      return DateTime(
+        referencia.year,
+        referencia.month,
+        referencia.day + 6,
+        23,
+        59,
+        59,
+      );
     }
 
     return null;
@@ -3746,17 +6517,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   DateTime referenciaPeriodoEscala() {
     final agora = DateTime.now();
-    final mesReferencia = mesAnoReferenciaEscala();
+    final eventosBase = eventosEscalaContinua();
 
-    if (mesReferencia != null && mesReferencia.year == agora.year && mesReferencia.month == agora.month) {
-      return agora;
-    }
-
-    final datas = escalaEventos
-        .map((event) => inicioEventoDateTime(event) ?? fimEventoDateTime(event))
-        .whereType<DateTime>()
-        .toList()
-      ..sort();
+    final datas =
+        eventosBase
+            .map(
+              (event) =>
+                  inicioEventoDateTime(event) ?? fimEventoDateTime(event),
+            )
+            .whereType<DateTime>()
+            .toList()
+          ..sort();
 
     if (datas.isNotEmpty) {
       return datas.first;
@@ -3782,7 +6553,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final isFolga = ehFolgaOuDayOff(event);
 
       if (isVoo) {
-        minutosVoo += diferencaMinutos(event['saida'] ?? '', event['chegada'] ?? '');
+        minutosVoo += diferencaMinutos(
+          event['saida'] ?? '',
+          event['chegada'] ?? '',
+        );
         km += toDouble(event['distancia_km']).round();
       }
 
@@ -3801,12 +6575,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   List<Map<String, String>> eventosParaResumoSelecionado() {
+    final eventosBase = eventosEscalaContinua();
     final referencia = referenciaPeriodoEscala();
-    final inicioJanela = inicioDaJanelaEscala(referencia);
-    final fimJanela = fimDaJanelaEscala(referencia);
-    final mesReferencia = mesAnoReferenciaEscala();
+    final mesResumo = mesKeyResumoAtual(referencia);
 
-    final eventos = escalaEventos.where((event) {
+    final eventos = eventosBase.where((event) {
       if (!ehEventoVisivelNaEscala(event)) return false;
 
       final inicio = inicioEventoDateTime(event);
@@ -3816,26 +6589,22 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final inicioEfetivo = inicio ?? fim!;
       final fimEfetivo = fim ?? inicioEfetivo;
 
-      if (escalaPeriodo == 'Hoje') {
-        return mesmoDia(inicioEfetivo, referencia) || mesmoDia(fimEfetivo, referencia);
-      }
-
-      if (escalaPeriodo == 'Semana') {
-        return !fimEfetivo.isBefore(inicioJanela) &&
-            (fimJanela == null || !inicioEfetivo.isAfter(fimJanela));
-      }
-
-      if (mesReferencia != null) {
-        return inicioEfetivo.month == mesReferencia.month &&
-            inicioEfetivo.year == mesReferencia.year;
+      final parts = mesResumo.split('-');
+      final ano = int.tryParse(parts.first);
+      final mes = parts.length > 1 ? int.tryParse(parts[1]) : null;
+      if (ano != null && mes != null) {
+        return (inicioEfetivo.year == ano && inicioEfetivo.month == mes) ||
+            (fimEfetivo.year == ano && fimEfetivo.month == mes);
       }
 
       return true;
     }).toList();
 
     eventos.sort((a, b) {
-      final dataA = inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
-      final dataB = inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+      final dataA =
+          inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+      final dataB =
+          inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
       return dataA.compareTo(dataB);
     });
 
@@ -3843,9 +6612,34 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   String contextoResumoSelecionado() {
-    if (escalaPeriodo == 'Hoje') return 'hoje';
-    if (escalaPeriodo == 'Semana') return '7 dias';
-    return mesReferenciaEscala();
+    return labelMesKey(mesKeyResumoAtual(referenciaPeriodoEscala()));
+  }
+
+  String mesKeyResumoAtual(DateTime referencia) {
+    if (escalaMesResumoKey != null) return escalaMesResumoKey!;
+    return '${referencia.year}-${referencia.month.toString().padLeft(2, '0')}';
+  }
+
+  int calcularMinutosVooUltimos28Dias() {
+    final agora = DateTime.now();
+    final inicioJanela = agora.subtract(const Duration(days: 28));
+    var minutosVoo = 0;
+
+    for (final event in eventosEscalaContinua()) {
+      if (!ehEventoVisivelNaEscala(event)) continue;
+      if ((event['tipo'] ?? '').toUpperCase() != 'VOO') continue;
+
+      final inicio = inicioEventoDateTime(event);
+      if (inicio == null) continue;
+      if (inicio.isBefore(inicioJanela) || inicio.isAfter(agora)) continue;
+
+      minutosVoo += diferencaMinutos(
+        event['saida'] ?? '',
+        event['chegada'] ?? '',
+      );
+    }
+
+    return minutosVoo;
   }
 
   String formatarMinutosComoHoras(int totalMinutos) {
@@ -3873,7 +6667,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   DateTime? inicioEventoDateTime(Map<String, String> event) {
     final dataBase = parseDataPtBr(event['data'] ?? '');
     if (dataBase == null) return null;
-    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+    if (ehFolgaOuDayOff(event)) {
+      return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
+    }
 
     final horaPreferida = primeiroHorarioValido([
       event['duty_report'],
@@ -3898,7 +6694,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   DateTime? fimEventoDateTime(Map<String, String> event) {
     final dataBase = parseDataPtBr(event['data'] ?? '');
     if (dataBase == null) return null;
-    if (ehFolgaOuDayOff(event)) return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+    if (ehFolgaOuDayOff(event)) {
+      return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+    }
 
     final horaPreferida = primeiroHorarioValido([
       event['duty_debrief'],
@@ -3957,7 +6755,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return int.tryParse(match.group(1) ?? '0') ?? 0;
   }
 
-  Map<String, List<Map<String, String>>> agruparEventosPorData(List<Map<String, String>> eventos) {
+  Map<String, List<Map<String, String>>> agruparEventosPorData(
+    List<Map<String, String>> eventos,
+  ) {
     final grupos = <String, List<Map<String, String>>>{};
 
     for (final event in eventos) {
@@ -4122,40 +6922,49 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     }
   }
 
-
   Widget buildJornadaPage() {
     final calc = calcularJornadaManual();
     final aviso = !jornadaAclimatado
         ? 'Cálculo exibido com base aclimatada por enquanto. A opção não aclimatado ficará preparada para uma etapa futura.'
         : jornadaTripulacao != 'Simples'
-            ? 'Cálculo exibido para tripulação simples por enquanto. Composta e revezamento ficarão preparadas para a próxima fase.'
-            : 'Cálculo pela Tabela B.1 para tripulação simples aclimatada.';
+        ? 'Cálculo exibido para tripulação simples por enquanto. Composta e revezamento ficarão preparadas para a próxima fase.'
+        : 'Cálculo dos limites da jornada pela apresentação e quantidade de etapas.';
 
     return buildPageShell(
       title: 'Jornada',
-      subtitle: 'Calcule limite de jornada, horário de término e corte dos motores.',
+      subtitle:
+          'Calcule limite de jornada, horário de término e corte dos motores.',
       icon: Icons.timer_outlined,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isMobile = constraints.maxWidth < 760;
+          final jornadaFieldWidth = isMobile ? double.infinity : 238.0;
+          final jornadaSmallFieldWidth = isMobile ? double.infinity : 190.0;
           return ListView(
+            controller: jornadaScrollController,
             padding: EdgeInsets.zero,
             children: [
               Container(
-                padding: EdgeInsets.all(isMobile ? 18 : 24),
+                padding: EdgeInsets.all(isMobile ? 12 : 18),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xFF020817), Color(0xFF071A34), Color(0xFF031024)],
+                    colors: [
+                      Color(0xFF020817),
+                      Color(0xFF071A34),
+                      Color(0xFF031024),
+                    ],
                   ),
-                  borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: AppColors.blue.withValues(alpha: 0.20)),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: AppColors.blue.withValues(alpha: 0.20),
+                  ),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.18),
-                      blurRadius: 26,
-                      offset: const Offset(0, 12),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
                     ),
                   ],
                 ),
@@ -4165,16 +6974,22 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                     Row(
                       children: [
                         Container(
-                          width: 46,
-                          height: 46,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
                             color: AppColors.blue.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.cyan.withValues(alpha: 0.28)),
+                            borderRadius: BorderRadius.circular(13),
+                            border: Border.all(
+                              color: AppColors.cyan.withValues(alpha: 0.28),
+                            ),
                           ),
-                          child: const Icon(Icons.timer_outlined, color: AppColors.cyan, size: 26),
+                          child: const Icon(
+                            Icons.timer_outlined,
+                            color: AppColors.cyan,
+                            size: 21,
+                          ),
                         ),
-                        const SizedBox(width: 14),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4183,19 +6998,19 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                                 'Calculadora de Jornada',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: isMobile ? 23 : 30,
+                                  fontSize: isMobile ? 19 : 24,
                                   fontWeight: FontWeight.w900,
                                   letterSpacing: -0.4,
                                 ),
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 2),
                               Text(
                                 aviso,
                                 style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.64),
-                                  fontSize: isMobile ? 12 : 14,
+                                  fontSize: isMobile ? 10 : 12,
                                   fontWeight: FontWeight.w600,
-                                  height: 1.35,
+                                  height: 1.22,
                                 ),
                               ),
                             ],
@@ -4203,73 +7018,87 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 22),
+                    const SizedBox(height: 14),
                     Wrap(
-                      spacing: 14,
-                      runSpacing: 14,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
                         SizedBox(
-                          width: isMobile ? double.infinity : 260,
+                          width: jornadaFieldWidth,
                           child: buildJornadaSwitchCard(),
                         ),
                         SizedBox(
-                          width: isMobile ? double.infinity : 260,
-                          child: buildJornadaDropdown<String>(
-                            label: 'Fuso da apresentação',
-                            icon: Icons.public_outlined,
-                            value: jornadaFusoApresentacao,
-                            items: fusosBrasil.keys.toList(),
-                            onChanged: (value) => setState(() => jornadaFusoApresentacao = value ?? jornadaFusoApresentacao),
-                          ),
-                        ),
-                        SizedBox(
-                          width: isMobile ? double.infinity : 260,
-                          child: buildJornadaDropdown<String>(
-                            label: 'Fuso do último destino',
-                            icon: Icons.place_outlined,
-                            value: jornadaFusoUltimoDestino,
-                            items: fusosBrasil.keys.toList(),
-                            onChanged: (value) => setState(() => jornadaFusoUltimoDestino = value ?? jornadaFusoUltimoDestino),
-                          ),
-                        ),
-                        SizedBox(
-                          width: isMobile ? double.infinity : 260,
+                          width: jornadaFieldWidth,
                           child: buildJornadaDropdown<String>(
                             label: 'Tipo de tripulação',
                             icon: Icons.groups_2_outlined,
                             value: jornadaTripulacao,
                             items: const ['Simples', 'Composta', 'Revezamento'],
-                            onChanged: (value) => setState(() => jornadaTripulacao = value ?? jornadaTripulacao),
+                            formatter: (value) => 'Tripulação: $value',
+                            onChanged: (value) => setState(
+                              () => jornadaTripulacao =
+                                  value ?? jornadaTripulacao,
+                            ),
                           ),
                         ),
                         SizedBox(
-                          width: isMobile ? double.infinity : 220,
+                          width: jornadaSmallFieldWidth,
+                          child: buildHorarioApresentacaoCard(),
+                        ),
+                        SizedBox(
+                          width: jornadaFieldWidth,
+                          child: buildJornadaDropdown<String>(
+                            label: 'Fuso de saída',
+                            icon: Icons.flight_takeoff_outlined,
+                            value: jornadaFusoApresentacao,
+                            items: fusosBrasil.keys.toList(),
+                            formatter: (value) => 'Saída: ${fusoCurto(value)}',
+                            onChanged: (value) => setState(
+                              () => jornadaFusoApresentacao =
+                                  value ?? jornadaFusoApresentacao,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: jornadaFieldWidth,
+                          child: buildJornadaDropdown<String>(
+                            label: 'Fuso de chegada',
+                            icon: Icons.flight_land_outlined,
+                            value: jornadaFusoUltimoDestino,
+                            items: fusosBrasil.keys.toList(),
+                            formatter: (value) =>
+                                'Chegada: ${fusoCurto(value)}',
+                            onChanged: (value) => setState(
+                              () => jornadaFusoUltimoDestino =
+                                  value ?? jornadaFusoUltimoDestino,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: jornadaSmallFieldWidth,
                           child: buildJornadaDropdown<int>(
                             label: 'Etapas / voos',
                             icon: Icons.flight_takeoff_outlined,
                             value: jornadaEtapas,
                             items: const [1, 2, 3, 4, 5, 6, 7, 8],
-                            formatter: (value) => value >= 7 ? '7+ etapas' : '$value etapa${value == 1 ? '' : 's'}',
-                            onChanged: (value) => setState(() => jornadaEtapas = value ?? jornadaEtapas),
+                            formatter: (value) =>
+                                value >= 7 ? 'Etapas: 7+' : 'Etapas: $value',
+                            onChanged: (value) => setState(
+                              () => jornadaEtapas = value ?? jornadaEtapas,
+                            ),
                           ),
                         ),
                         SizedBox(
-                          width: isMobile ? double.infinity : 220,
-                          child: buildHorarioApresentacaoCard(),
-                        ),
-                        SizedBox(
-                          width: isMobile ? double.infinity : 360,
+                          width: isMobile ? double.infinity : 310,
                           child: buildExtensaoJornadaCard(),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 22),
+                    const SizedBox(height: 14),
                     buildJornadaResultado(calc, isMobile: isMobile),
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
-              buildTabelaB1Visual(),
             ],
           );
         },
@@ -4278,38 +7107,55 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Map<String, int> get fusosBrasil => const {
-        'Fernando de Noronha (UTC-2)': -2,
-        'Brasília (UTC-3)': -3,
-        'Amazonas (UTC-4)': -4,
-        'Acre (UTC-5)': -5,
-      };
+    'Fernando de Noronha (UTC-2)': -2,
+    'Brasília (UTC-3)': -3,
+    'Amazonas (UTC-4)': -4,
+    'Acre (UTC-5)': -5,
+  };
+
+  String fusoCurto(String value) {
+    final idx = value.indexOf(' (');
+    return idx > 0 ? value.substring(0, idx) : value;
+  }
 
   Widget buildJornadaSwitchCard() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
       decoration: jornadaInputDecoration(),
       child: Row(
         children: [
           Container(
-            width: 38,
-            height: 38,
+            width: 30,
+            height: 30,
             decoration: BoxDecoration(
               color: AppColors.blue.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(11),
             ),
-            child: const Icon(Icons.access_time_filled_outlined, color: AppColors.cyan, size: 20),
+            child: const Icon(
+              Icons.access_time_filled_outlined,
+              color: AppColors.cyan,
+              size: 16,
+            ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 9),
           const Expanded(
             child: Text(
               'Aclimatado',
-              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
-          Switch(
-            value: jornadaAclimatado,
-            activeColor: AppColors.cyan,
-            onChanged: (value) => setState(() => jornadaAclimatado = value),
+          Transform.scale(
+            scale: 0.78,
+            child: Switch(
+              value: jornadaAclimatado,
+              activeThumbColor: AppColors.cyan,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              onChanged: (value) => setState(() => jornadaAclimatado = value),
+            ),
           ),
         ],
       ),
@@ -4321,32 +7167,44 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       borderRadius: BorderRadius.circular(22),
       onTap: escolherHorarioApresentacao,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
         decoration: jornadaInputDecoration(),
         child: Row(
           children: [
             Container(
-              width: 38,
-              height: 38,
+              width: 30,
+              height: 30,
               decoration: BoxDecoration(
                 color: AppColors.blue.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(11),
               ),
-              child: const Icon(Icons.schedule_outlined, color: AppColors.cyan, size: 20),
+              child: const Icon(
+                Icons.schedule_outlined,
+                color: AppColors.cyan,
+                size: 16,
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 9),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     'Apresentação',
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.60), fontSize: 12, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.60),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     formatarTimeOfDay(jornadaApresentacao),
-                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ],
               ),
@@ -4363,7 +7221,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final descanso = calcularDescansoMinimoMinutos();
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
       decoration: jornadaInputDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4371,43 +7229,63 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
+                width: 30,
+                height: 30,
                 decoration: BoxDecoration(
                   color: const Color(0xFFF6B21A).withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(Icons.more_time_outlined, color: Color(0xFFF6B21A), size: 20),
+                child: const Icon(
+                  Icons.more_time_outlined,
+                  color: Color(0xFFF6B21A),
+                  size: 16,
+                ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 9),
               const Expanded(
                 child: Text(
                   'Extensão de jornada',
-                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
-              Switch(
-                value: jornadaHouveExtensao,
-                activeColor: const Color(0xFFF6B21A),
-                onChanged: (value) => setState(() {
-                  jornadaHouveExtensao = value;
-                  if (!value) jornadaMinutosExcedidos = 0;
-                }),
+              Transform.scale(
+                scale: 0.78,
+                child: Switch(
+                  value: jornadaHouveExtensao,
+                  activeThumbColor: const Color(0xFFF6B21A),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onChanged: (value) => setState(() {
+                    jornadaHouveExtensao = value;
+                    if (!value) jornadaMinutosExcedidos = 0;
+                  }),
+                ),
               ),
             ],
           ),
           if (jornadaHouveExtensao) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Text(
                   'Minutos excedidos',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.62), fontSize: 12, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const Spacer(),
                 Text(
                   '$minutos min',
-                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ],
             ),
@@ -4419,40 +7297,48 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               activeColor: const Color(0xFFF6B21A),
               inactiveColor: Colors.white.withValues(alpha: 0.18),
               label: '$minutos min',
-              onChanged: (value) => setState(() => jornadaMinutosExcedidos = value),
+              onChanged: (value) =>
+                  setState(() => jornadaMinutosExcedidos = value),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(11),
                 border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.hotel_outlined, color: Colors.white.withValues(alpha: 0.70), size: 17),
-                  const SizedBox(width: 8),
+                  Icon(
+                    Icons.hotel_outlined,
+                    color: Colors.white.withValues(alpha: 0.70),
+                    size: 15,
+                  ),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       'Descanso mínimo: ${formatarMinutosComoDuracao(descanso)}',
-                      style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 7),
-            Text(
-              'Regra aplicada: 12h + dobro dos minutos excedidos.',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.50), fontSize: 11, fontWeight: FontWeight.w600),
-            ),
           ] else ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 5),
             Text(
-              'Sem extensão: descanso mínimo base de 12h.',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, fontWeight: FontWeight.w700),
+              'Sem extensão de jornada.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ],
@@ -4496,57 +7382,57 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     String Function(T value)? formatter,
   }) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      padding: const EdgeInsets.fromLTRB(11, 8, 11, 8),
       decoration: jornadaInputDecoration(),
       child: Row(
         children: [
           Container(
-            width: 38,
-            height: 38,
+            width: 30,
+            height: 30,
             decoration: BoxDecoration(
               color: AppColors.blue.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(11),
             ),
-            child: Icon(icon, color: AppColors.cyan, size: 20),
+            child: Icon(icon, color: AppColors.cyan, size: 16),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 9),
           Expanded(
             child: DropdownButtonHideUnderline(
               child: DropdownButton<T>(
                 value: value,
                 isExpanded: true,
+                isDense: true,
                 dropdownColor: AppColors.navy2,
                 iconEnabledColor: Colors.white70,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                iconSize: 18,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                ),
                 items: items.map((item) {
                   return DropdownMenuItem<T>(
                     value: item,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.48), fontSize: 10, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 2),
-                        Text(formatter?.call(item) ?? item.toString(), overflow: TextOverflow.ellipsis),
-                      ],
+                    child: Text(
+                      formatter?.call(item) ?? item.toString(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   );
                 }).toList(),
                 selectedItemBuilder: (context) {
                   return items.map((item) {
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 3),
-                        Text(
-                          formatter?.call(item) ?? item.toString(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        formatter?.call(item) ?? item.toString(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
                         ),
-                      ],
+                      ),
                     );
                   }).toList();
                 },
@@ -4562,48 +7448,81 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   BoxDecoration jornadaInputDecoration() {
     return BoxDecoration(
       color: Colors.white.withValues(alpha: 0.075),
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(15),
       border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
     );
   }
 
-  Widget buildJornadaResultado(Map<String, dynamic> calc, {required bool isMobile}) {
+  Widget buildJornadaResultado(
+    Map<String, dynamic> calc, {
+    required bool isMobile,
+  }) {
     final limiteJornada = calc['limite_jornada_texto'] as String;
     final limiteVoo = calc['limite_voo_texto'] as String;
     final termino = calc['termino_texto'] as String;
     final corte = calc['corte_texto'] as String;
-    final faixa = calc['faixa'] as String;
-    final coluna = calc['coluna'] as String;
     final fusoDestino = calc['fuso_destino'] as String;
     final descansoMinimo = calc['descanso_minimo_texto'] as String;
-    final minutosExcedidos = calc['minutos_excedidos'] as int;
 
     final cards = [
-      buildResultadoJornadaCard(Icons.timelapse_outlined, 'Limite de jornada', limiteJornada, 'Tabela B.1 • $faixa • $coluna', AppColors.blue),
-      buildResultadoJornadaCard(Icons.flight_land_outlined, 'Corte dos motores', corte, '30 min antes do término', const Color(0xFFF6B21A)),
-      buildResultadoJornadaCard(Icons.flag_outlined, 'Término da jornada', termino, 'Hora local: $fusoDestino', AppColors.green),
-      buildResultadoJornadaCard(Icons.flight_outlined, 'Limite de voo', limiteVoo, 'Tempo máximo de voo', AppColors.cyan),
-      buildResultadoJornadaCard(Icons.hotel_outlined, 'Descanso mínimo', descansoMinimo, minutosExcedidos > 0 ? '12h + 2 × $minutosExcedidos min' : 'Sem extensão de jornada', const Color(0xFF9AA7FF)),
+      buildResultadoJornadaCard(
+        Icons.flight_outlined,
+        'Limite de voo',
+        limiteVoo,
+        '',
+        AppColors.cyan,
+      ),
+      buildResultadoJornadaCard(
+        Icons.timelapse_outlined,
+        'Limite de jornada',
+        limiteJornada,
+        '',
+        AppColors.blue,
+      ),
+      buildResultadoJornadaCard(
+        Icons.flight_land_outlined,
+        'Corte dos motores',
+        corte,
+        '',
+        const Color(0xFFF6B21A),
+      ),
+      buildResultadoJornadaCard(
+        Icons.flag_outlined,
+        'Término da jornada',
+        termino,
+        'Hora local: $fusoDestino',
+        AppColors.green,
+      ),
+      buildResultadoJornadaCard(
+        Icons.hotel_outlined,
+        'Descanso mínimo',
+        descansoMinimo,
+        '',
+        const Color(0xFF9AA7FF),
+      ),
     ];
 
     return Wrap(
-      spacing: 14,
-      runSpacing: 14,
+      spacing: 10,
+      runSpacing: 10,
       children: cards.map((card) {
-        return SizedBox(
-          width: isMobile ? double.infinity : 260,
-          child: card,
-        );
+        return SizedBox(width: isMobile ? double.infinity : 220, child: card);
       }).toList(),
     );
   }
 
-  Widget buildResultadoJornadaCard(IconData icon, String label, String value, String subtitle, Color color) {
+  Widget buildResultadoJornadaCard(
+    IconData icon,
+    String label,
+    String value,
+    String subtitle,
+    Color color,
+  ) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.09),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(17),
         border: Border.all(color: color.withValues(alpha: 0.24)),
       ),
       child: Column(
@@ -4612,21 +7531,48 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Row(
             children: [
               Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(color: color.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12)),
-                child: Icon(icon, color: color, size: 19),
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 15),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
-                child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.70), fontSize: 12, fontWeight: FontWeight.w800)),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.70),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
-          const SizedBox(height: 5),
-          Text(subtitle, style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.5,
+            ),
+          ),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -4653,9 +7599,23 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Tabela B.1 usada no cálculo', style: TextStyle(color: AppColors.navy, fontSize: 20, fontWeight: FontWeight.w900)),
+          const Text(
+            'Tabela B.1 usada no cálculo',
+            style: TextStyle(
+              color: AppColors.navy,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
           const SizedBox(height: 4),
-          const Text('O número fora dos parênteses é jornada máxima. O número entre parênteses é tempo máximo de voo.', style: TextStyle(color: Color(0xFF607086), fontSize: 13, fontWeight: FontWeight.w600)),
+          const Text(
+            'O número fora dos parênteses é jornada máxima. O número entre parênteses é tempo máximo de voo.',
+            style: TextStyle(
+              color: Color(0xFF607086),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const SizedBox(height: 14),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -4670,7 +7630,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 DataColumn(label: Text('7+')),
               ],
               rows: linhas.map((linha) {
-                return DataRow(cells: linha.map((cell) => DataCell(Text(cell, style: const TextStyle(fontWeight: FontWeight.w700)))).toList());
+                return DataRow(
+                  cells: linha
+                      .map(
+                        (cell) => DataCell(
+                          Text(
+                            cell,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                );
               }).toList(),
             ),
           ),
@@ -4680,12 +7651,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   int calcularDescansoMinimoMinutos() {
-    final excedidos = jornadaHouveExtensao ? jornadaMinutosExcedidos.round() : 0;
+    final excedidos = jornadaHouveExtensao
+        ? jornadaMinutosExcedidos.round()
+        : 0;
     return (12 * 60) + (2 * excedidos);
   }
 
   Map<String, dynamic> calcularJornadaManual() {
-    final reportMin = jornadaApresentacao.hour * 60 + jornadaApresentacao.minute;
+    final reportMin =
+        jornadaApresentacao.hour * 60 + jornadaApresentacao.minute;
     final row = linhaTabelaB1(reportMin);
     final col = colunaTabelaB1(jornadaEtapas);
     final valores = tabelaB1()[row]![col]!;
@@ -4696,7 +7670,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final offsetOrigem = fusosBrasil[jornadaFusoApresentacao] ?? -3;
     final offsetDestino = fusosBrasil[jornadaFusoUltimoDestino] ?? -3;
 
-    final base = DateTime(2026, 1, 1, jornadaApresentacao.hour, jornadaApresentacao.minute);
+    final base = DateTime(
+      2026,
+      1,
+      1,
+      jornadaApresentacao.hour,
+      jornadaApresentacao.minute,
+    );
     final utcInicio = base.subtract(Duration(hours: offsetOrigem));
     final utcTermino = utcInicio.add(Duration(minutes: limiteJornadaMin));
     final terminoDestino = utcTermino.add(Duration(hours: offsetDestino));
@@ -4716,7 +7696,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       'fuso_destino': jornadaFusoUltimoDestino,
       'descanso_minimo_min': descansoMinimoMin,
       'descanso_minimo_texto': formatarMinutosComoDuracao(descansoMinimoMin),
-      'minutos_excedidos': jornadaHouveExtensao ? jornadaMinutosExcedidos.round() : 0,
+      'minutos_excedidos': jornadaHouveExtensao
+          ? jornadaMinutosExcedidos.round()
+          : 0,
     };
   }
 
@@ -4740,13 +7722,55 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   Map<String, Map<String, List<double>>> tabelaB1() {
     return {
-      '06:00–06:59': {'1-2': [11, 9], '3-4': [11, 9], '5': [10, 8], '6': [9, 8], '7+': [9, 8]},
-      '07:00–07:59': {'1-2': [13, 9.5], '3-4': [12, 9], '5': [11, 9], '6': [10, 8], '7+': [9, 8]},
-      '08:00–11:59': {'1-2': [13, 10], '3-4': [13, 9.5], '5': [12, 9], '6': [11, 9], '7+': [10, 8]},
-      '12:00–13:59': {'1-2': [12, 9.5], '3-4': [12, 9], '5': [11, 9], '6': [10, 8], '7+': [9, 8]},
-      '14:00–15:59': {'1-2': [11, 9], '3-4': [11, 9], '5': [10, 8], '6': [9, 8], '7+': [9, 8]},
-      '16:00–17:59': {'1-2': [10, 8], '3-4': [10, 8], '5': [9, 8], '6': [9, 8], '7+': [9, 8]},
-      '18:00–05:59': {'1-2': [9, 8], '3-4': [9, 8], '5': [9, 7], '6': [9, 7], '7+': [9, 7]},
+      '06:00–06:59': {
+        '1-2': [11, 9],
+        '3-4': [11, 9],
+        '5': [10, 8],
+        '6': [9, 8],
+        '7+': [9, 8],
+      },
+      '07:00–07:59': {
+        '1-2': [13, 9.5],
+        '3-4': [12, 9],
+        '5': [11, 9],
+        '6': [10, 8],
+        '7+': [9, 8],
+      },
+      '08:00–11:59': {
+        '1-2': [13, 10],
+        '3-4': [13, 9.5],
+        '5': [12, 9],
+        '6': [11, 9],
+        '7+': [10, 8],
+      },
+      '12:00–13:59': {
+        '1-2': [12, 9.5],
+        '3-4': [12, 9],
+        '5': [11, 9],
+        '6': [10, 8],
+        '7+': [9, 8],
+      },
+      '14:00–15:59': {
+        '1-2': [11, 9],
+        '3-4': [11, 9],
+        '5': [10, 8],
+        '6': [9, 8],
+        '7+': [9, 8],
+      },
+      '16:00–17:59': {
+        '1-2': [10, 8],
+        '3-4': [10, 8],
+        '5': [9, 8],
+        '6': [9, 8],
+        '7+': [9, 8],
+      },
+      '18:00–05:59': {
+        '1-2': [9, 8],
+        '3-4': [9, 8],
+        '5': [9, 7],
+        '6': [9, 7],
+        '7+': [9, 7],
+      },
     };
   }
 
@@ -4755,14 +7779,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   String formatarHoraDateTime(DateTime dt) {
-    final hora = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final hora =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     final diaOffset = dt.day - 1;
     if (diaOffset <= 0) return hora;
     return '$hora +$diaOffset';
   }
 
   String formatarHoraDateTimeComBase(DateTime dt, DateTime dataBase) {
-    final hora = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final hora =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     final base = DateTime(dataBase.year, dataBase.month, dataBase.day);
     final atual = DateTime(dt.year, dt.month, dt.day);
     final diaOffset = atual.difference(base).inDays;
@@ -4780,7 +7806,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget buildTabelaPage() {
     return buildPageShell(
       title: 'Tabela',
-      subtitle: selectedFileName == null ? 'Nenhuma escala importada.' : 'Visão técnica tipo Excel: $selectedFileName',
+      subtitle: selectedFileName == null
+          ? 'Nenhuma escala importada.'
+          : 'Visão técnica tipo Excel: $selectedFileName',
       icon: Icons.table_chart_outlined,
       child: GlassCard(
         child: Padding(
@@ -4789,7 +7817,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               ? const Center(
                   child: Text(
                     'Importe uma escala Excel para visualizar a tabela técnica.',
-                    style: TextStyle(color: Color(0xFF536273), fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: Color(0xFF536273),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 )
               : buildEventosTable(),
@@ -4800,10 +7831,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   Widget buildEventosTable() {
     return Scrollbar(
+      controller: tabelaHorizontalScrollController,
       thumbVisibility: true,
       child: SingleChildScrollView(
+        controller: tabelaHorizontalScrollController,
         scrollDirection: Axis.horizontal,
         child: SingleChildScrollView(
+          controller: tabelaVerticalScrollController,
           child: DataTable(
             headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
             columns: const [
@@ -4830,29 +7864,33 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               DataColumn(label: Text('Status')),
             ],
             rows: escalaEventos.map((event) {
-              return DataRow(cells: [
-                DataCell(Text(event['data'] ?? '')),
-                DataCell(Text(event['tipo'] ?? '')),
-                DataCell(Text(event['identificacao'] ?? '')),
-                DataCell(Text(event['origem'] ?? '')),
-                DataCell(Text(event['saida'] ?? '')),
-                DataCell(Text(event['destino'] ?? '')),
-                DataCell(Text(event['chegada'] ?? '')),
-                DataCell(Text(event['distancia_km'] ?? '')),
-                DataCell(Text(event['km_diurno'] ?? '')),
-                DataCell(Text(event['km_noturno'] ?? '')),
-                DataCell(Text(event['km_fim_semana'] ?? '')),
-                DataCell(Text(event['km_fim_semana_noturno'] ?? '')),
-                DataCell(Text(event['duty_report'] ?? '')),
-                DataCell(Text(event['duty_debrief'] ?? '')),
-                DataCell(Text(event['cafe'] ?? '')),
-                DataCell(Text(event['almoco'] ?? '')),
-                DataCell(Text(event['jantar'] ?? '')),
-                DataCell(Text(event['ceia'] ?? '')),
-                DataCell(Text(formatarGrupo(event['grupo_diaria'] ?? ''))),
-                DataCell(Text(formatarMoedaNome(event['moeda_diaria'] ?? ''))),
-                DataCell(Text(event['status'] ?? '')),
-              ]);
+              return DataRow(
+                cells: [
+                  DataCell(Text(event['data'] ?? '')),
+                  DataCell(Text(event['tipo'] ?? '')),
+                  DataCell(Text(event['identificacao'] ?? '')),
+                  DataCell(Text(event['origem'] ?? '')),
+                  DataCell(Text(event['saida'] ?? '')),
+                  DataCell(Text(event['destino'] ?? '')),
+                  DataCell(Text(event['chegada'] ?? '')),
+                  DataCell(Text(event['distancia_km'] ?? '')),
+                  DataCell(Text(event['km_diurno'] ?? '')),
+                  DataCell(Text(event['km_noturno'] ?? '')),
+                  DataCell(Text(event['km_fim_semana'] ?? '')),
+                  DataCell(Text(event['km_fim_semana_noturno'] ?? '')),
+                  DataCell(Text(event['duty_report'] ?? '')),
+                  DataCell(Text(event['duty_debrief'] ?? '')),
+                  DataCell(Text(event['cafe'] ?? '')),
+                  DataCell(Text(event['almoco'] ?? '')),
+                  DataCell(Text(event['jantar'] ?? '')),
+                  DataCell(Text(event['ceia'] ?? '')),
+                  DataCell(Text(formatarGrupo(event['grupo_diaria'] ?? ''))),
+                  DataCell(
+                    Text(formatarMoedaNome(event['moeda_diaria'] ?? '')),
+                  ),
+                  DataCell(Text(event['status'] ?? '')),
+                ],
+              );
             }).toList(),
           ),
         ),
@@ -4860,35 +7898,314 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  Widget buildConfigPage() {
+  Widget buildProfilePage() {
     return buildPageShell(
-      title: 'Configurações',
-      subtitle: 'Valores de cargos, benefícios, descontos e parâmetros do simulador.',
-      icon: Icons.settings_outlined,
+      title: 'Perfil',
+      subtitle: 'Cadastro, assinatura, pagamento e preferências do cliente.',
+      icon: Icons.person_outline,
       child: ListView(
         padding: EdgeInsets.zero,
         children: [
-          GlassCard(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Edite os valores e pressione Enter em cada campo. Depois clique em salvar para manter no navegador.',
-                      style: TextStyle(fontSize: 15, color: Color(0xFF536273), fontWeight: FontWeight.w600),
+          buildCustomerProfileHeader(),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final mobile = constraints.maxWidth < 760;
+              final cards = [
+                buildProfileInfoCard(
+                  icon: Icons.verified_user_outlined,
+                  title: 'Assinatura',
+                  primary: 'Crew 4U Pro',
+                  secondary: 'Ativa • renovação em 12/07/2026',
+                  action: 'Gerenciar plano',
+                ),
+                buildProfileInfoCard(
+                  icon: Icons.credit_card_outlined,
+                  title: 'Pagamento',
+                  primary: 'Visa final 4242',
+                  secondary: 'Próxima cobrança: R\$ 29,90',
+                  action: 'Atualizar cartão',
+                ),
+                buildProfileInfoCard(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Faturamento',
+                  primary: 'Notas e recibos',
+                  secondary: 'Histórico disponível para download',
+                  action: 'Ver histórico',
+                ),
+              ];
+
+              if (mobile) {
+                return Column(
+                  children:
+                      cards
+                          .expand((card) => [card, const SizedBox(height: 10)])
+                          .toList()
+                        ..removeLast(),
+                );
+              }
+
+              return Row(
+                children:
+                    cards
+                        .expand(
+                          (card) => [
+                            Expanded(child: card),
+                            const SizedBox(width: 12),
+                          ],
+                        )
+                        .toList()
+                      ..removeLast(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildCustomerProfileHeader() {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.navy, AppColors.navy2],
+        ),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: AppColors.blue.withValues(alpha: 0.18)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.navy.withValues(alpha: 0.16),
+            blurRadius: 26,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final mobile = constraints.maxWidth < 680;
+          final avatar = Stack(
+            children: [
+              Container(
+                width: mobile ? 72 : 86,
+                height: mobile ? 72 : 86,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [AppColors.blue, AppColors.cyan],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.blue.withValues(alpha: 0.28),
+                      blurRadius: 22,
+                    ),
+                  ],
+                ),
+                child: const Center(
+                  child: Text(
+                    'R',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 36,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                  PrimaryButton(icon: Icons.save_outlined, label: 'Salvar configs', onTap: salvarConfiguracoesLocais),
-                  const SizedBox(width: 10),
-                  SecondaryButton(icon: Icons.currency_exchange, label: 'Atualizar dólar', onTap: carregarCotacaoDolar),
-                ],
+                ),
               ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: AppColors.navy,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.cyan, width: 2),
+                  ),
+                  child: const Icon(
+                    Icons.camera_alt_outlined,
+                    color: AppColors.cyan,
+                    size: 15,
+                  ),
+                ),
+              ),
+            ],
+          );
+
+          final details = Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Rafael Steffens',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'rafael@email.com',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.68),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    buildProfilePill(
+                      Icons.flight_takeoff_outlined,
+                      selectedCargo,
+                    ),
+                    buildProfilePill(
+                      Icons.workspace_premium_outlined,
+                      'Cliente Pro',
+                    ),
+                    buildProfilePill(Icons.lock_outline, 'Dados seguros'),
+                  ],
+                ),
+              ],
+            ),
+          );
+
+          final editButton = SecondaryButton(
+            icon: Icons.edit_outlined,
+            label: 'Editar perfil',
+            onTap: () => showSnack('Edição de perfil em preparação.'),
+          );
+
+          if (mobile) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                avatar,
+                const SizedBox(height: 14),
+                Row(children: [details]),
+                const SizedBox(height: 14),
+                editButton,
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              avatar,
+              const SizedBox(width: 18),
+              details,
+              const SizedBox(width: 18),
+              editButton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget buildProfilePill(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.cyan, size: 15),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 22),
-          buildCargoConfigEditor(),
         ],
+      ),
+    );
+  }
+
+  Widget buildProfileInfoCard({
+    required IconData icon,
+    required String title,
+    required String primary,
+    required String secondary,
+    required String action,
+  }) {
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: AppColors.blue.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: AppColors.blue, size: 20),
+                ),
+                const Spacer(),
+                Icon(
+                  Icons.chevron_right,
+                  color: AppColors.navy.withValues(alpha: 0.35),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text(
+              title.toUpperCase(),
+              style: TextStyle(
+                color: AppColors.navy.withValues(alpha: 0.52),
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              primary,
+              style: const TextStyle(
+                color: AppColors.navy,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              secondary,
+              style: const TextStyle(
+                color: Color(0xFF617086),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 13),
+            Text(
+              action,
+              style: const TextStyle(
+                color: AppColors.blue,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -4917,17 +8234,27 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           child: GlassCard(
             child: Padding(
               padding: const EdgeInsets.all(22),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(cargo, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.navy)),
-                const SizedBox(height: 16),
-                ...campos.map((campo) {
-                  return buildConfigField(
-                    cargo: cargo,
-                    campo: campo,
-                    valor: config[campo] ?? 0,
-                  );
-                }),
-              ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    cargo,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...campos.map((campo) {
+                    return buildConfigField(
+                      cargo: cargo,
+                      campo: campo,
+                      valor: config[campo] ?? 0,
+                    );
+                  }),
+                ],
+              ),
             ),
           ),
         );
@@ -4941,40 +8268,49 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     required double valor,
   }) {
     final controller = TextEditingController(
-      text: valor.toStringAsFixed(campo.startsWith('km') ? 6 : 2).replaceAll('.', ','),
+      text: valor
+          .toStringAsFixed(campo.startsWith('km') ? 6 : 2)
+          .replaceAll('.', ','),
     );
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Row(children: [
-        Expanded(
-          child: Text(
-            formatarCampoConfig(campo),
-            style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.navy),
-          ),
-        ),
-        SizedBox(
-          width: 126,
-          child: TextField(
-            controller: controller,
-            textAlign: TextAlign.right,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: AppColors.softBlue,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              formatarCampoConfig(campo),
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                color: AppColors.navy,
+              ),
             ),
-            onSubmitted: (value) {
-              final parsed = double.tryParse(value.replaceAll(',', '.'));
-              if (parsed == null) return;
-
-              setState(() {
-                cargoConfigs[cargo]![campo] = parsed;
-              });
-            },
           ),
-        ),
-      ]),
+          SizedBox(
+            width: 126,
+            child: TextField(
+              controller: controller,
+              textAlign: TextAlign.right,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: AppColors.softBlue,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              onSubmitted: (value) {
+                final parsed = double.tryParse(value.replaceAll(',', '.'));
+                if (parsed == null) return;
+
+                setState(() {
+                  cargoConfigs[cargo]![campo] = parsed;
+                });
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -5004,11 +8340,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildAeroportosPage() {
-    final voosSemDistancia = (resumo['voos_sem_distancia'] as List<dynamic>? ?? []);
+    final voosSemDistancia =
+        (resumo['voos_sem_distancia'] as List<dynamic>? ?? []);
 
     return buildPageShell(
       title: 'Aeroportos',
-      subtitle: 'Corrija rotas sem distância e mantenha uma lista local de aeroportos pendentes.',
+      subtitle:
+          'Corrija rotas sem distância e mantenha uma lista local de aeroportos pendentes.',
       icon: Icons.place_outlined,
       child: ListView(
         padding: EdgeInsets.zero,
@@ -5023,10 +8361,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       voosSemDistancia.isEmpty
                           ? 'Nenhum voo sem distância identificado na importação atual.'
                           : 'Voos sem distância: ${voosSemDistancia.join(', ')}',
-                      style: const TextStyle(fontSize: 15, color: Color(0xFF536273), fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFF536273),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                  PrimaryButton(icon: Icons.add_location_alt_outlined, label: 'Adicionar aeroporto', onTap: abrirDialogAdicionarAeroporto),
+                  PrimaryButton(
+                    icon: Icons.add_location_alt_outlined,
+                    label: 'Adicionar aeroporto',
+                    onTap: abrirDialogAdicionarAeroporto,
+                  ),
                 ],
               ),
             ),
@@ -5043,7 +8389,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       ),
                     )
                   : DataTable(
-                      headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
+                      headingRowColor: WidgetStateProperty.all(
+                        AppColors.softBlue,
+                      ),
                       columns: const [
                         DataColumn(label: Text('IATA')),
                         DataColumn(label: Text('ICAO')),
@@ -5052,13 +8400,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                         DataColumn(label: Text('Longitude')),
                       ],
                       rows: aeroportosLocais.map((item) {
-                        return DataRow(cells: [
-                          DataCell(Text(item['iata']?.toString() ?? '')),
-                          DataCell(Text(item['icao']?.toString() ?? '')),
-                          DataCell(Text(item['nome']?.toString() ?? '')),
-                          DataCell(Text(item['lat']?.toString() ?? '')),
-                          DataCell(Text(item['lon']?.toString() ?? '')),
-                        ]);
+                        return DataRow(
+                          cells: [
+                            DataCell(Text(item['iata']?.toString() ?? '')),
+                            DataCell(Text(item['icao']?.toString() ?? '')),
+                            DataCell(Text(item['nome']?.toString() ?? '')),
+                            DataCell(Text(item['lat']?.toString() ?? '')),
+                            DataCell(Text(item['lon']?.toString() ?? '')),
+                          ],
+                        );
                       }).toList(),
                     ),
             ),
@@ -5082,16 +8432,22 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           title: const Text('Adicionar aeroporto local'),
           content: SizedBox(
             width: 420,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              dialogField(iata, 'IATA'),
-              dialogField(icao, 'ICAO'),
-              dialogField(nome, 'Nome'),
-              dialogField(lat, 'Latitude'),
-              dialogField(lon, 'Longitude'),
-            ]),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                dialogField(iata, 'IATA'),
+                dialogField(icao, 'ICAO'),
+                dialogField(nome, 'Nome'),
+                dialogField(lat, 'Latitude'),
+                dialogField(lon, 'Longitude'),
+              ],
+            ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
             FilledButton(
               onPressed: () {
                 setState(() {
@@ -5120,17 +8476,143 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
         controller: controller,
-        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+        ),
       ),
     );
   }
 
-  void imprimirPdfEscala() {
+  void abrirOpcoesExportarEscala() {
     if (escalaEventos.isEmpty) {
       showSnack('Importe uma escala antes de gerar o PDF.');
       return;
     }
 
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.navy,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+      builder: (context) {
+        Widget option({
+          required IconData icon,
+          required String title,
+          required String subtitle,
+          required VoidCallback onTap,
+        }) {
+          return InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [AppColors.blue, AppColors.cyan],
+                      ),
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Icon(icon, color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.66),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, color: Colors.white54),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Exportar escala',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Escolha o estilo do material.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                option(
+                  icon: Icons.fit_screen_outlined,
+                  title: 'Celular 9:16',
+                  subtitle:
+                      'Lista vertical bonita, no formato que cabe melhor na tela.',
+                  onTap: () {
+                    Navigator.pop(context);
+                    imprimirPdfEscala(compacto: true);
+                  },
+                ),
+                const SizedBox(height: 10),
+                option(
+                  icon: Icons.article_outlined,
+                  title: 'A4 completo',
+                  subtitle: 'Versão elegante para imprimir ou guardar em PDF.',
+                  onTap: () {
+                    Navigator.pop(context);
+                    imprimirPdfEscala(compacto: false);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> imprimirPdfEscala({required bool compacto}) async {
     final eventos = eventosPrincipaisDaEscala();
     final grouped = <String, List<Map<String, String>>>{};
     for (final event in eventos) {
@@ -5147,9 +8629,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final saida = limparHoraParaExibicao(event['saida'] ?? '');
       final chegada = limparHoraParaExibicao(event['chegada'] ?? '');
       final isFolga = ehFolgaOuDayOff(event);
-      final cls = tipo == 'VOO' ? 'voo' : tipo.contains('RESERVA') ? 'reserva' : tipo.contains('SOBREAVISO') ? 'sobreaviso' : 'folga';
-      final detalhe = tipo == 'VOO' ? '$origem → $destino' : (isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada));
-      final horario = isFolga ? '' : (tipo == 'VOO' ? '$saida – $chegada' : formatarIntervaloEvento(saida, chegada));
+      final cls = tipo == 'VOO'
+          ? 'voo'
+          : tipo.contains('RESERVA')
+          ? 'reserva'
+          : tipo.contains('SOBREAVISO')
+          ? 'sobreaviso'
+          : 'folga';
+      final detalhe = tipo == 'VOO'
+          ? '$origem → $destino'
+          : (isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada));
+      final horario = isFolga
+          ? ''
+          : (tipo == 'VOO'
+                ? '$saida – $chegada'
+                : formatarIntervaloEvento(saida, chegada));
       return '<div class="event $cls"><div><b>${esc(isFolga ? 'FOLGA' : tipo)}</b> ${esc(id)}</div><div>${esc(detalhe)}</div><div>${esc(horario)}</div></div>';
     }
 
@@ -5162,10 +8656,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         final tipo = (event['tipo'] ?? '').toUpperCase();
         final dutyReport = horarioLimpo(event['duty_report'] ?? '');
 
-        if (tipo == 'VOO' && dutyReport.isNotEmpty && dutyReport != ultimoReport) {
-          final analise = calcularLimiteJornadaDaEscala(eventosDoDia, i, dutyReport);
+        if (tipo == 'VOO' &&
+            dutyReport.isNotEmpty &&
+            dutyReport != ultimoReport) {
+          final analise = calcularLimiteJornadaDaEscala(
+            eventosDoDia,
+            i,
+            dutyReport,
+          );
           final limite = analise['limite_jornada_horario']?.toString() ?? '';
-          parts.add('<div class="report"><b>Apresentação</b> ${esc(dutyReport)}${limite.isNotEmpty ? ' · Limite de jornada ${esc(limite)}' : ''}</div>');
+          parts.add(
+            '<div class="report"><b>Apresentação</b> ${esc(dutyReport)}${limite.isNotEmpty ? ' · Limite de jornada ${esc(limite)}' : ''}</div>',
+          );
           ultimoReport = dutyReport;
         }
 
@@ -5175,30 +8677,93 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       return parts.join();
     }
 
-    final dias = grouped.entries.map((entry) {
+    String dayHtml(MapEntry<String, List<Map<String, String>>> entry) {
       final data = entry.key;
       final eventosHtml = jornadaHtml(entry.value);
       return '<section class="day"><h2>${esc(data)}</h2>$eventosHtml</section>';
-    }).join();
+    }
 
-    final content = """
+    final dias = grouped.entries.map(dayHtml).join();
+    final resumoPeriodo = calcularResumoDoPeriodoSelecionado();
+    final horasVoo = formatarMinutosComoHoras(
+      resumoPeriodo['minutos_voo'] ?? 0,
+    );
+    final kmTotal = formatarNumeroInteiro(resumoPeriodo['km'] ?? 0);
+    final reservas = (resumoPeriodo['reservas'] ?? 0).toString();
+    final sobreavisos = (resumoPeriodo['sobreavisos'] ?? 0).toString();
+    final folgas = (resumoPeriodo['folgas'] ?? 0).toString();
+
+    final contentCompacto =
+        """
 <!doctype html>
 <html>
 <head>
-<meta charset=\"utf-8\">
+<meta charset="utf-8">
+<title>Crew 4U - Escala celular</title>
+<style>
+  @page { size: 90mm 160mm; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, sans-serif; background: #020817; color: white; }
+  .canvas { width: 100%; min-height: 100vh; padding: 12px; background:
+    radial-gradient(circle at 88% 3%, rgba(24,200,255,.18), transparent 24%),
+    linear-gradient(160deg, #020817 0%, #071a34 58%, #031021 100%); }
+  .top { border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.065); border-radius: 18px; padding: 13px; margin-bottom: 10px; }
+  .logo { font-size: 26px; line-height: .9; letter-spacing: -1.6px; font-weight: 300; }
+  .logo span { color: #128DFF; font-size: 39px; font-weight: 200; margin: 0 -3px; text-shadow: 0 0 14px rgba(24,200,255,.50); }
+  .title { margin-top: 8px; }
+  .title h1 { margin: 0; font-size: 20px; letter-spacing: -.3px; }
+  .title p { margin: 4px 0 0; color: rgba(255,255,255,.64); font-size: 11px; font-weight: 800; }
+  .days { display: block; }
+  .day { border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.070); border-radius: 16px; overflow: hidden; margin-bottom: 10px; break-inside: avoid; }
+  h2 { margin: 0; padding: 9px 11px; background: rgba(18,141,255,.18); font-size: 12px; letter-spacing: .4px; }
+  .report { margin: 8px 9px 0; padding: 8px 9px; border-radius: 10px; color: #8ce4ff; background: rgba(24,200,255,.10); border: 1px solid rgba(24,200,255,.20); font-size: 10.5px; font-weight: 800; }
+  .event { display: grid; grid-template-columns: 1fr 1fr .82fr; gap: 6px; align-items: center; padding: 10px 9px; border-top: 1px solid rgba(255,255,255,.08); font-size: 11.4px; line-height: 1.2; }
+  .event b { font-size: 10.5px; }
+  .voo { border-left: 4px solid #128DFF; }
+  .reserva { border-left: 4px solid #F05252; }
+  .sobreaviso { border-left: 4px solid #F6B21A; }
+  .folga { border-left: 4px solid #19A65A; }
+  .foot { color: rgba(255,255,255,.42); font-size: 9px; font-weight: 800; text-align: center; padding: 5px 0 0; }
+</style>
+<script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); };</script>
+</head>
+<body>
+  <main class="canvas">
+    <div class="top">
+      <div class="logo">crew<span>4</span>u</div>
+      <div class="title"><h1>Minha escala</h1><p>${esc(mesReferenciaEscala())} • ${esc(selectedCargo)}</p></div>
+    </div>
+    <section class="days">$dias</section>
+    <div class="foot">Crew 4U • escala para celular</div>
+  </main>
+</body>
+</html>
+""";
+
+    final contentA4 =
+        """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
 <title>Crew 4U - Escala</title>
 <style>
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; margin: 0; color: #061329; background: white; }
-  .header { background: #061329; color: white; border-radius: 18px; padding: 18px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
-  .logo { font-size: 28px; font-weight: 900; letter-spacing: -1px; }
-  .logo span { color: #128DFF; }
-  .sub { color: rgba(255,255,255,.70); font-size: 12px; margin-top: 4px; }
-  .day { border: 1px solid #D8E2EE; border-radius: 14px; overflow: hidden; margin-bottom: 10px; page-break-inside: avoid; }
-  h2 { margin: 0; padding: 9px 12px; background: #EAF5FF; font-size: 14px; color: #061329; }
-  .report { margin: 9px 10px 0; padding: 8px 10px; border-radius: 10px; background: #E8F4FF; color: #075CA8; font-size: 11px; font-weight: 800; border: 1px solid #B9DAFF; }
-  .event { display: grid; grid-template-columns: 1.1fr 1.2fr .9fr; gap: 8px; padding: 10px 12px; border-top: 1px solid #E6EEF7; font-size: 12px; align-items: center; }
+  body { font-family: Arial, sans-serif; margin: 0; color: #061329; background: #F4F8FC; }
+  .header { background: linear-gradient(135deg, #061329, #0A1C38); color: white; border-radius: 22px; padding: 20px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 14px 30px rgba(6,19,41,.16); }
+  .logo { font-size: 30px; font-weight: 300; letter-spacing: -2px; }
+  .logo span { color: #128DFF; font-size: 46px; font-weight: 200; margin: 0 -3px; text-shadow: 0 0 12px rgba(24,200,255,.45); }
+  .sub { color: rgba(255,255,255,.70); font-size: 11px; margin-top: 4px; font-weight: 700; }
+  .month { padding: 10px 14px; border-radius: 999px; background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.12); font-size: 13px; font-weight: 900; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
+  .stat { background: white; border: 1px solid #DDE7F2; border-radius: 14px; padding: 10px; }
+  .stat span { color: #64748B; font-size: 9px; font-weight: 900; text-transform: uppercase; }
+  .stat b { display: block; margin-top: 5px; color: #061329; font-size: 15px; }
+  .day { background: white; border: 1px solid #D8E2EE; border-radius: 16px; overflow: hidden; margin-bottom: 9px; page-break-inside: avoid; }
+  h2 { margin: 0; padding: 9px 12px; background: #EAF5FF; font-size: 13px; color: #061329; }
+  .report { margin: 8px 10px 0; padding: 8px 10px; border-radius: 11px; background: #E8F4FF; color: #075CA8; font-size: 10.5px; font-weight: 800; border: 1px solid #B9DAFF; }
+  .event { display: grid; grid-template-columns: 1.1fr 1.2fr .9fr; gap: 8px; padding: 9px 12px; border-top: 1px solid #E6EEF7; font-size: 11px; align-items: center; }
   .voo { border-left: 5px solid #128DFF; }
   .reserva { border-left: 5px solid #E53935; }
   .sobreaviso { border-left: 5px solid #F5B31A; }
@@ -5207,22 +8772,32 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 <script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); };</script>
 </head>
 <body>
-  <div class=\"header\">
-    <div><div class=\"logo\">crew<span>4</span>u</div><div class=\"sub\">${esc(selectedFileName ?? '')}</div></div>
-    <div>${esc(mesReferenciaEscala())}</div>
+  <div class="header">
+    <div><div class="logo">crew<span>4</span>u</div><div class="sub">${esc(selectedFileName ?? '')}</div></div>
+    <div class="month">${esc(mesReferenciaEscala())}</div>
   </div>
+  <section class="stats">
+    <div class="stat"><span>Horas de voo</span><b>${esc(horasVoo)}</b></div>
+    <div class="stat"><span>KM voados</span><b>${esc(kmTotal)}</b></div>
+    <div class="stat"><span>Reservas</span><b>${esc(reservas)}</b></div>
+    <div class="stat"><span>Sobreavisos</span><b>${esc(sobreavisos)}</b></div>
+    <div class="stat"><span>Folgas</span><b>${esc(folgas)}</b></div>
+  </section>
   $dias
 </body>
 </html>
 """;
 
-    final blob = html.Blob([content], 'text/html;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.window.open(url, '_blank');
+    final result = await documentService.openPrintableHtml(
+      filename: compacto
+          ? 'crew4u_escala_celular.html'
+          : 'crew4u_escala_a4.html',
+      content: compacto ? contentCompacto : contentA4,
+    );
+    showSnack(result.message);
   }
 
-
-  void imprimirPdfHolerite() {
+  Future<void> imprimirPdfHolerite() async {
     final holerite = calcularHoleriteLocal();
     final proventos = holerite['proventos'] as List<dynamic>;
     final baseIr = toStringDynamicMap(holerite['base_ir']);
@@ -5265,7 +8840,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     String diariaTabela(String grupo) {
       final dados = toStringDynamicMap(diarias[grupo]);
-      final moeda = dados['moeda']?.toString() ?? obterMoedaPadraoDoGrupo(grupo);
+      final moeda =
+          dados['moeda']?.toString() ?? obterMoedaPadraoDoGrupo(grupo);
 
       String row(String titulo, String key) {
         final refeicao = toStringDynamicMap(dados[key]);
@@ -5291,7 +8867,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       ''';
     }
 
-    final content = '''
+    final content =
+        '''
 <!doctype html>
 <html>
 <head>
@@ -5383,12 +8960,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 </html>
 ''';
 
-    final blob = html.Blob([content], 'text/html;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.window.open(url, '_blank');
+    final result = await documentService.openPrintableHtml(
+      filename: 'crew4u_holerite.html',
+      content: content,
+    );
+    showSnack(result.message);
   }
 
-  void exportarCsvHolerite() {
+  Future<void> exportarCsvHolerite() async {
     final holerite = calcularHoleriteLocal();
     final proventos = holerite['proventos'] as List<dynamic>;
     final baseIr = toStringDynamicMap(holerite['base_ir']);
@@ -5415,12 +8994,23 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       ]);
     }
 
-    rows.add(['TOTAL PROVENTOS', '', '', formatarMoeda(salario['proventos'], 'BRL')]);
+    rows.add([
+      'TOTAL PROVENTOS',
+      '',
+      '',
+      formatarMoeda(salario['proventos'], 'BRL'),
+    ]);
     rows.add([]);
 
     rows.add(['BASE DE IR']);
-    rows.add(['Total Proventos', formatarMoeda(baseIr['total_proventos'], 'BRL')]);
-    rows.add(['INSS Remuneracao', '-${formatarMoeda(baseIr['inss_remuneracao'], 'BRL')}']);
+    rows.add([
+      'Total Proventos',
+      formatarMoeda(baseIr['total_proventos'], 'BRL'),
+    ]);
+    rows.add([
+      'INSS Remuneracao',
+      '-${formatarMoeda(baseIr['inss_remuneracao'], 'BRL')}',
+    ]);
     rows.add(['Base de IR', formatarMoeda(baseIr['base_ir'], 'BRL')]);
     rows.add([]);
 
@@ -5435,39 +9025,47 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       ]);
     }
 
-    rows.add(['DESCONTO TOTAL', '', formatarMoeda(salario['descontos'], 'BRL')]);
+    rows.add([
+      'DESCONTO TOTAL',
+      '',
+      formatarMoeda(salario['descontos'], 'BRL'),
+    ]);
     rows.add([]);
 
     rows.add(['SALARIO']);
     rows.add(['Proventos', formatarMoeda(salario['proventos'], 'BRL')]);
     rows.add(['Descontos', '-${formatarMoeda(salario['descontos'], 'BRL')}']);
-    rows.add(['SALARIO LIQUIDO', formatarMoeda(salario['salario_liquido'], 'BRL')]);
+    rows.add([
+      'SALARIO LIQUIDO',
+      formatarMoeda(salario['salario_liquido'], 'BRL'),
+    ]);
 
-    final csv = rows.map((row) {
-      return row.map((cell) {
-        final safe = cell.replaceAll('"', '""');
-        return '"$safe"';
-      }).join(';');
-    }).join('\n');
+    final csv = rows
+        .map((row) {
+          return row
+              .map((cell) {
+                final safe = cell.replaceAll('"', '""');
+                return '"$safe"';
+              })
+              .join(';');
+        })
+        .join('\n');
 
-    final bytes = utf8.encode(csv);
-    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
     final filename = 'crew4u_holerite_${selectedCargo.toLowerCase()}.csv';
-
-    html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-
-    html.Url.revokeObjectUrl(url);
+    final result = await documentService.saveTextFile(
+      filename: filename,
+      content: csv,
+      mimeType: 'text/csv',
+    );
+    showSnack(result.message);
   }
 
   void showSnack(String message) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
@@ -5530,17 +9128,28 @@ class PrimaryButton extends StatelessWidget {
                     color: AppColors.blue.withValues(alpha: 0.24),
                     blurRadius: 18,
                     offset: const Offset(0, 9),
-                  )
+                  ),
                 ],
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: Colors.white, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13),
-          ),
-        ]),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -5570,14 +9179,21 @@ class SecondaryButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: AppColors.blue.withValues(alpha: 0.18)),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: AppColors.blue, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.navy, fontWeight: FontWeight.w900, fontSize: 13),
-          ),
-        ]),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: AppColors.blue, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.navy,
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
