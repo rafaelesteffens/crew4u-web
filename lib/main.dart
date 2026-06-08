@@ -197,6 +197,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   @override
   void dispose() {
+    escalaScrollController.removeListener(atualizarMesResumoPeloScroll);
     escalaScrollController.dispose();
     salarioScrollController.dispose();
     jornadaScrollController.dispose();
@@ -208,6 +209,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   @override
   void initState() {
     super.initState();
+    escalaScrollController.addListener(atualizarMesResumoPeloScroll);
     unawaited(inicializarDadosLocais());
     carregarCotacaoDolar();
   }
@@ -2714,7 +2716,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
         color: panelColor,
         borderRadius: BorderRadius.circular(13),
@@ -2728,21 +2730,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           final left = Row(
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: 24,
+                height: 24,
                 decoration: BoxDecoration(
                   color: danger.withValues(alpha: isDark ? 0.18 : 0.10),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.payments_outlined, color: danger, size: 15),
+                child: Icon(Icons.payments_outlined, color: danger, size: 13),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   label,
                   style: TextStyle(
                     color: textColor,
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -2755,16 +2757,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 left,
-                const SizedBox(height: 4),
-                control,
                 const SizedBox(height: 3),
+                control,
+                const SizedBox(height: 2),
                 Align(
                   alignment: Alignment.centerRight,
                   child: Text(
                     value,
                     style: TextStyle(
                       color: textColor,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -2786,7 +2788,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   textAlign: TextAlign.right,
                   style: TextStyle(
                     color: textColor,
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -2956,13 +2958,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     return SizedBox(
       width: width,
-      height: 34,
+      height: 28,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onChanged(!value),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(horizontal: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 7),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(999),
@@ -2972,8 +2974,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             children: [
               AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                width: 18,
-                height: 18,
+                width: 15,
+                height: 15,
                 decoration: BoxDecoration(
                   color: value ? AppColors.green : Colors.white24,
                   borderRadius: BorderRadius.circular(999),
@@ -2984,15 +2986,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   ),
                 ),
                 child: value
-                    ? const Icon(Icons.check, color: Colors.white, size: 12)
+                    ? const Icon(Icons.check, color: Colors.white, size: 10)
                     : null,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
                 value ? 'Ativo' : 'Não uso',
                 style: TextStyle(
                   color: isDark ? Colors.white : AppColors.navy,
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -3021,8 +3023,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     return Container(
       width: width,
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(999),
@@ -3034,10 +3036,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           isDense: true,
           isExpanded: true,
           dropdownColor: isDark ? AppColors.navy2 : Colors.white,
-          icon: Icon(Icons.keyboard_arrow_down, color: textColor, size: 17),
+          icon: Icon(Icons.keyboard_arrow_down, color: textColor, size: 15),
           style: TextStyle(
             color: textColor,
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: FontWeight.w900,
           ),
           items: items
@@ -4282,6 +4284,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   void atualizarMesResumoPeloScroll() {
     if (escalaDiaKeys.isEmpty) return;
+    if (!escalaScrollController.hasClients) return;
 
     String? melhorData;
     var melhorDistancia = double.infinity;
@@ -6943,8 +6946,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   String mesKeyResumoAtual(DateTime referencia) {
-    if (selectedEscalaMesKey != null) return selectedEscalaMesKey!;
     if (escalaMesResumoKey != null) return escalaMesResumoKey!;
+    if (selectedEscalaMesKey != null) return selectedEscalaMesKey!;
     return '${referencia.year}-${referencia.month.toString().padLeft(2, '0')}';
   }
 
