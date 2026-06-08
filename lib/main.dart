@@ -1081,7 +1081,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 horizontalPadding,
                 verticalPadding,
                 horizontalPadding,
-                isMobile ? 92 : verticalPadding,
+                isMobile ? 8 : verticalPadding,
               ),
               child: Column(
                 children: [
@@ -1613,7 +1613,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       icon: Icons.payments_outlined,
       child: ListView(
         controller: salarioScrollController,
-        padding: const EdgeInsets.only(bottom: 104),
+        padding: const EdgeInsets.only(bottom: 56),
         children: [
           Container(
             decoration: BoxDecoration(
@@ -1738,8 +1738,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                           size: 17,
                         ),
                       ),
-              Text(
-                'Diárias no exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}',
+                      Text(
+                        'Diárias no exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.70),
                           fontSize: 12,
@@ -4169,21 +4169,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           buildEscalaFloatingSummaryBar(),
           const SizedBox(height: 10),
           Expanded(
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (_) {
-                atualizarMesResumoPeloScroll();
-                return false;
-              },
-              child: ListView(
-                controller: escalaScrollController,
-                padding: const EdgeInsets.only(bottom: 104),
-                children: [
-                  if (eventos.isEmpty)
-                    buildEscalaEmptyState()
-                  else
-                    buildEscalaTimeline(eventos),
-                ],
-              ),
+            child: ListView(
+              controller: escalaScrollController,
+              padding: const EdgeInsets.only(bottom: 56),
+              children: [
+                if (eventos.isEmpty)
+                  buildEscalaEmptyState()
+                else
+                  buildEscalaTimeline(eventos),
+              ],
             ),
           ),
         ],
@@ -5350,7 +5344,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     Map<String, String> alvo,
   ) {
     final chave = chaveEventoEscala(alvo);
-    final index = eventos.indexWhere((event) => chaveEventoEscala(event) == chave);
+    final index = eventos.indexWhere(
+      (event) => chaveEventoEscala(event) == chave,
+    );
     return index < 0 ? 0 : index;
   }
 
@@ -6496,9 +6492,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         curve: Curves.easeOutCubic,
         alignment: 0.04,
       );
-      Future.delayed(const Duration(milliseconds: 680), () {
-        if (mounted) atualizarMesResumoPeloScroll();
-      });
       Future.delayed(const Duration(milliseconds: 650), () {
         if (!mounted) return;
         final retryContext = key?.currentContext;
@@ -6520,7 +6513,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           curve: Curves.easeOutCubic,
           alignment: 0.04,
         );
-        atualizarMesResumoPeloScroll();
       });
     });
   }
@@ -7216,7 +7208,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           final jornadaSmallFieldWidth = isMobile ? double.infinity : 190.0;
           return ListView(
             controller: jornadaScrollController,
-            padding: const EdgeInsets.only(bottom: 104),
+            padding: const EdgeInsets.only(bottom: 56),
             children: [
               Container(
                 padding: EdgeInsets.all(isMobile ? 12 : 18),
@@ -8104,69 +8096,63 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildEventosTable() {
-    return Scrollbar(
+    return SingleChildScrollView(
       controller: tabelaHorizontalScrollController,
-      thumbVisibility: true,
+      scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
-        controller: tabelaHorizontalScrollController,
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          controller: tabelaVerticalScrollController,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
-            columns: const [
-              DataColumn(label: Text('Data')),
-              DataColumn(label: Text('Tipo')),
-              DataColumn(label: Text('Identificação')),
-              DataColumn(label: Text('Origem')),
-              DataColumn(label: Text('Saída')),
-              DataColumn(label: Text('Destino')),
-              DataColumn(label: Text('Chegada')),
-              DataColumn(label: Text('Distância KM')),
-              DataColumn(label: Text('KM Diurno')),
-              DataColumn(label: Text('KM Noturno')),
-              DataColumn(label: Text('KM FDS')),
-              DataColumn(label: Text('KM FDS Not')),
-              DataColumn(label: Text('Duty Report')),
-              DataColumn(label: Text('Duty Debrief')),
-              DataColumn(label: Text('Café')),
-              DataColumn(label: Text('Almoço')),
-              DataColumn(label: Text('Jantar')),
-              DataColumn(label: Text('Ceia')),
-              DataColumn(label: Text('Grupo Diária')),
-              DataColumn(label: Text('Moeda')),
-              DataColumn(label: Text('Status')),
-            ],
-            rows: escalaEventos.map((event) {
-              return DataRow(
-                cells: [
-                  DataCell(Text(event['data'] ?? '')),
-                  DataCell(Text(event['tipo'] ?? '')),
-                  DataCell(Text(event['identificacao'] ?? '')),
-                  DataCell(Text(event['origem'] ?? '')),
-                  DataCell(Text(event['saida'] ?? '')),
-                  DataCell(Text(event['destino'] ?? '')),
-                  DataCell(Text(event['chegada'] ?? '')),
-                  DataCell(Text(event['distancia_km'] ?? '')),
-                  DataCell(Text(event['km_diurno'] ?? '')),
-                  DataCell(Text(event['km_noturno'] ?? '')),
-                  DataCell(Text(event['km_fim_semana'] ?? '')),
-                  DataCell(Text(event['km_fim_semana_noturno'] ?? '')),
-                  DataCell(Text(event['duty_report'] ?? '')),
-                  DataCell(Text(event['duty_debrief'] ?? '')),
-                  DataCell(Text(event['cafe'] ?? '')),
-                  DataCell(Text(event['almoco'] ?? '')),
-                  DataCell(Text(event['jantar'] ?? '')),
-                  DataCell(Text(event['ceia'] ?? '')),
-                  DataCell(Text(formatarGrupo(event['grupo_diaria'] ?? ''))),
-                  DataCell(
-                    Text(formatarMoedaNome(event['moeda_diaria'] ?? '')),
-                  ),
-                  DataCell(Text(event['status'] ?? '')),
-                ],
-              );
-            }).toList(),
-          ),
+        controller: tabelaVerticalScrollController,
+        child: DataTable(
+          headingRowColor: WidgetStateProperty.all(AppColors.softBlue),
+          columns: const [
+            DataColumn(label: Text('Data')),
+            DataColumn(label: Text('Tipo')),
+            DataColumn(label: Text('Identificação')),
+            DataColumn(label: Text('Origem')),
+            DataColumn(label: Text('Saída')),
+            DataColumn(label: Text('Destino')),
+            DataColumn(label: Text('Chegada')),
+            DataColumn(label: Text('Distância KM')),
+            DataColumn(label: Text('KM Diurno')),
+            DataColumn(label: Text('KM Noturno')),
+            DataColumn(label: Text('KM FDS')),
+            DataColumn(label: Text('KM FDS Not')),
+            DataColumn(label: Text('Duty Report')),
+            DataColumn(label: Text('Duty Debrief')),
+            DataColumn(label: Text('Café')),
+            DataColumn(label: Text('Almoço')),
+            DataColumn(label: Text('Jantar')),
+            DataColumn(label: Text('Ceia')),
+            DataColumn(label: Text('Grupo Diária')),
+            DataColumn(label: Text('Moeda')),
+            DataColumn(label: Text('Status')),
+          ],
+          rows: escalaEventos.map((event) {
+            return DataRow(
+              cells: [
+                DataCell(Text(event['data'] ?? '')),
+                DataCell(Text(event['tipo'] ?? '')),
+                DataCell(Text(event['identificacao'] ?? '')),
+                DataCell(Text(event['origem'] ?? '')),
+                DataCell(Text(event['saida'] ?? '')),
+                DataCell(Text(event['destino'] ?? '')),
+                DataCell(Text(event['chegada'] ?? '')),
+                DataCell(Text(event['distancia_km'] ?? '')),
+                DataCell(Text(event['km_diurno'] ?? '')),
+                DataCell(Text(event['km_noturno'] ?? '')),
+                DataCell(Text(event['km_fim_semana'] ?? '')),
+                DataCell(Text(event['km_fim_semana_noturno'] ?? '')),
+                DataCell(Text(event['duty_report'] ?? '')),
+                DataCell(Text(event['duty_debrief'] ?? '')),
+                DataCell(Text(event['cafe'] ?? '')),
+                DataCell(Text(event['almoco'] ?? '')),
+                DataCell(Text(event['jantar'] ?? '')),
+                DataCell(Text(event['ceia'] ?? '')),
+                DataCell(Text(formatarGrupo(event['grupo_diaria'] ?? ''))),
+                DataCell(Text(formatarMoedaNome(event['moeda_diaria'] ?? ''))),
+                DataCell(Text(event['status'] ?? '')),
+              ],
+            );
+          }).toList(),
         ),
       ),
     );
@@ -8178,7 +8164,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       subtitle: 'Cadastro, assinatura, pagamento e preferências do cliente.',
       icon: Icons.person_outline,
       child: ListView(
-        padding: const EdgeInsets.only(bottom: 104),
+        padding: const EdgeInsets.only(bottom: 56),
         children: [
           buildCustomerProfileHeader(),
           const SizedBox(height: 18),
@@ -8623,7 +8609,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           'Corrija rotas sem distância e mantenha uma lista local de aeroportos pendentes.',
       icon: Icons.place_outlined,
       child: ListView(
-        padding: const EdgeInsets.only(bottom: 104),
+        padding: const EdgeInsets.only(bottom: 56),
         children: [
           GlassCard(
             child: Padding(
