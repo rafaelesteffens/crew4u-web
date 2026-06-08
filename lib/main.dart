@@ -27,6 +27,9 @@ class CrewForYouApp extends StatelessWidget {
     return MaterialApp(
       title: 'Crew 4U',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        scrollbars: false,
+      ),
       themeMode: ThemeMode.system,
       theme: ThemeData(
         useMaterial3: true,
