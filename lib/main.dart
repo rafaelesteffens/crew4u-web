@@ -928,7 +928,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return <Map<String, Object>>[
       {'index': 0, 'icon': Icons.flight_takeoff_outlined, 'label': 'Escala'},
       {'index': 1, 'icon': Icons.payments_outlined, 'label': 'Salário'},
-      {'index': 2, 'icon': Icons.table_chart_outlined, 'label': 'Tabela'},
       {'index': 3, 'icon': Icons.timer_outlined, 'label': 'Jornada'},
       {'index': 4, 'icon': Icons.person_outline, 'label': 'Perfil'},
     ];
@@ -5605,8 +5604,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                       : 'De acordo com sua apresentação, sua jornada deve encerrar às $termino local.',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.76),
-                    fontSize: isMobile ? 12 : 9,
-                    fontWeight: FontWeight.w800,
+                    fontSize: isMobile ? 9 : 9,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
@@ -5672,6 +5671,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         tipo.contains('SOBREAVISO') || idUpper.startsWith('HSB');
     final isReserva = tipo.contains('RESERVA') || idUpper.startsWith('ASB');
     final isFolga = ehFolgaOuDayOff(event);
+    final isDescanso = tipo == 'DESCANSO';
     final origem = event['origem'] ?? '';
     final destino = event['destino'] ?? '';
     final saida = event['saida'] ?? '';
@@ -5699,6 +5699,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       color = AppColors.green;
       icon = Icons.weekend_outlined;
       label = 'Folga';
+    } else if (isDescanso) {
+      color = const Color(0xFF7C8AA5);
+      icon = Icons.hotel_outlined;
+      label = 'Descanso';
     } else {
       color = AppColors.green;
       icon = Icons.event_note_outlined;
@@ -5708,7 +5712,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < 520;
-        final stackDuration = constraints.maxWidth < 360;
 
         final tag = Container(
           padding: EdgeInsets.symmetric(
@@ -5732,7 +5735,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,
-                  fontSize: isMobile ? 10 : 11,
+                  fontSize: isMobile ? 11 : 11,
                 ),
               ),
             ],
@@ -5756,12 +5759,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 ],
               )
             : Text(
-                isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada),
+                isFolga
+                    ? 'Dia livre'
+                    : isDescanso
+                    ? (origem.isEmpty
+                          ? 'Descanso fora da base'
+                          : 'Descanso em $origem')
+                    : formatarIntervaloEvento(saida, chegada),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: isMobile ? 12 : 13,
+                  fontSize: isMobile ? 13 : 13,
                   fontWeight: FontWeight.w800,
                 ),
               );
@@ -5784,32 +5793,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                     tag,
                     const SizedBox(width: 7),
                     SizedBox(
-                      width: stackDuration ? 58 : 86,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            id,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          if (stackDuration && duracaoTexto.isNotEmpty) ...[
-                            const SizedBox(height: 3),
-                            buildDurationChip(
-                              duracaoTexto,
-                              color,
-                              compact: true,
-                            ),
-                          ],
-                        ],
+                      width: 62,
+                      child: Text(
+                        id,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
-                    if (!stackDuration && duracaoTexto.isNotEmpty) ...[
+                    if (duracaoTexto.isNotEmpty) ...[
                       const SizedBox(width: 5),
                       buildDurationChip(duracaoTexto, color, compact: true),
                     ],
@@ -6301,8 +6296,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   Widget buildDurationChip(String text, Color color, {bool compact = false}) {
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? 5 : 7,
-        vertical: compact ? 2 : 3,
+        horizontal: compact ? 6 : 7,
+        vertical: compact ? 3 : 3,
       ),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
@@ -6315,15 +6310,15 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           Icon(
             Icons.schedule,
             color: color.withValues(alpha: 0.92),
-            size: compact ? 10 : 11,
+            size: compact ? 11 : 11,
           ),
           const SizedBox(width: 3),
           Text(
             text,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.68),
-              fontSize: compact ? 9 : 10,
-              fontWeight: FontWeight.w700,
+              fontSize: compact ? 10 : 10,
+              fontWeight: FontWeight.w800,
               letterSpacing: 0.1,
             ),
           ),
@@ -6449,8 +6444,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           time,
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.58),
-            fontSize: compact ? 9 : 10,
-            fontWeight: FontWeight.w700,
+            fontSize: compact ? 10 : 10,
+            fontWeight: FontWeight.w800,
           ),
         ),
         const SizedBox(height: 1),
@@ -6458,7 +6453,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           airport,
           style: TextStyle(
             color: Colors.white,
-            fontSize: compact ? 14 : 17,
+            fontSize: compact ? 15 : 17,
             fontWeight: FontWeight.w900,
             letterSpacing: -0.4,
           ),
@@ -6639,6 +6634,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     return tipo == 'VOO' ||
         tipo.contains('SOBREAVISO') ||
         tipo.contains('RESERVA') ||
+        tipo == 'DESCANSO' ||
         ehFolgaOuDayOff(event) ||
         id.startsWith('HSB') ||
         id.startsWith('ASB');
