@@ -565,6 +565,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
         return {
           'data': map['data']?.toString() ?? '',
+          'data_fim_iso': map['data_fim_iso']?.toString() ?? '',
           'tipo': map['tipo']?.toString() ?? '',
           'identificacao': map['identificacao']?.toString() ?? '',
           'pairing': map['pairing']?.toString() ?? '',
@@ -7037,10 +7038,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     var extraDias = extrairOffsetDias(horaPreferida);
     final inicio = inicioEventoDateTime(event);
 
+    final dataFim = parseDataIso(event['data_fim_iso'] ?? '');
+    final dataReferencia =
+        dataFim != null && dataFim.isAfter(dataBase) ? dataFim : dataBase;
+    if (dataFim != null && dataFim.isAfter(dataBase)) {
+      extraDias = 0;
+    }
+
     var fim = DateTime(
-      dataBase.year,
-      dataBase.month,
-      dataBase.day + extraDias,
+      dataReferencia.year,
+      dataReferencia.month,
+      dataReferencia.day + extraDias,
       minutosFim ~/ 60,
       minutosFim % 60,
     );
@@ -7050,6 +7058,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     }
 
     return fim;
+  }
+
+  DateTime? parseDataIso(String data) {
+    final parts = data.trim().split('-');
+    if (parts.length < 3) return null;
+
+    final ano = int.tryParse(parts[0]);
+    final mes = int.tryParse(parts[1]);
+    final dia = int.tryParse(parts[2]);
+
+    if (dia == null || mes == null || ano == null) return null;
+    return DateTime(ano, mes, dia);
   }
 
   DateTime? parseDataPtBr(String data) {
