@@ -111,9 +111,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   int assistenciaMedicaAmil = 1;
   bool servicoSaudeDasa = false;
   bool seguroBradescoFuneral = false;
-  String seguroVidaComplementar = 'Nao Utilizo';
-  String assistenciaOdontoFamilia = 'Nao Utilizo';
-  String gympass = 'Nao Utilizo';
+  String seguroVidaComplementar = 'Não utilizo';
+  String assistenciaOdontoFamilia = 'Não utilizo';
+  String gympass = 'Não utilizo';
 
   double cotacaoDolar = 5.20;
   String cotacaoStatus = 'Cotação padrão';
@@ -132,6 +132,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   String selectedEscalaTipo = 'executada';
   Map<String, Map<String, dynamic>> meteoCache = {};
   Set<String> meteoLoadingKeys = {};
+  bool mostrarUploadSuccess = false;
 
   Map<String, dynamic> resumo = resumoVazio();
 
@@ -596,7 +597,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         escalaEventos = eventos;
         resumo = rawSummary;
         importStatus =
-            'Arquivo lido com sucesso. ${eventos.length} eventos tratados encontrados.';
+            'Escala importada com sucesso. ${eventos.length} eventos tratados encontrados.';
+        mostrarUploadSuccess = true;
         selectedIndex = 0;
         ultimaDataAutoScrollEscala = null;
         escalaDiaKeys.clear();
@@ -609,6 +611,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     } catch (error) {
       setState(() {
         importStatus = 'Erro ao enviar/ler o Excel: $error';
+        mostrarUploadSuccess = false;
         escalaEventos = [];
         resumo = resumoVazio();
         isLoading = false;
@@ -1078,7 +1081,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 horizontalPadding,
                 verticalPadding,
                 horizontalPadding,
-                isMobile ? 8 : verticalPadding,
+                isMobile ? 92 : verticalPadding,
               ),
               child: Column(
                 children: [
@@ -1597,7 +1600,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildHoleritePage() {
-    final diarias = toStringDynamicMap(resumo['diarias']);
+    final resumoFinanceiro = resumoFinanceiroPeriodoSelecionado();
+    final diarias = toStringDynamicMap(resumoFinanceiro['diarias']);
     final holerite = calcularHoleriteLocal();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1605,11 +1609,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       title: 'Salário',
       subtitle: selectedFileName == null
           ? 'Importe uma escala para começar.'
-          : '$selectedCargo • $selectedFileName',
+          : 'Cálculo do mês selecionado na escala.',
       icon: Icons.payments_outlined,
       child: ListView(
         controller: salarioScrollController,
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.only(bottom: 104),
         children: [
           Container(
             decoration: BoxDecoration(
@@ -1641,8 +1645,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             ),
           ),
           const SizedBox(height: 22),
-          buildValidatorSection(),
-          const SizedBox(height: 22),
           buildDiariasResumoSection(diarias),
         ],
       ),
@@ -1650,7 +1652,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildProfessionalHeader(Map<String, dynamic> salario) {
-    final diariasUsd = toDouble(resumo['total_diarias_usd']);
+    final resumoFinanceiro = resumoFinanceiroPeriodoSelecionado();
+    final diariasUsd = toDouble(resumoFinanceiro['total_diarias_usd']);
     final diariasUsdConvertidas = diariasUsd * cotacaoDolar;
 
     return LayoutBuilder(
@@ -1696,7 +1699,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                   Text(
                     selectedFileName == null
                         ? 'Importe uma escala para gerar a simulação.'
-                        : '$selectedCargo • $selectedFileName',
+                        : 'Mês selecionado: ${contextoResumoSelecionado()}',
                     maxLines: isMobile ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1735,8 +1738,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                           size: 17,
                         ),
                       ),
-                      Text(
-                        'Diárias exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}',
+              Text(
+                'Diárias no exterior: ${formatarMoeda(diariasUsdConvertidas, 'BRL')}',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.70),
                           fontSize: 12,
@@ -1856,8 +1859,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         ),
         const SizedBox(width: 10),
         SecondaryButton(
-          icon: Icons.badge_outlined,
-          label: selectedCargo,
+          icon: Icons.calendar_month_outlined,
+          label: contextoResumoSelecionado(),
           onTap: () => setState(() => selectedIndex = 0),
         ),
       ],
@@ -1870,13 +1873,14 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   Map<String, dynamic> calcularHoleriteLocal() {
     final config = obterConfigCargo();
+    final resumoAtual = resumoFinanceiroPeriodoSelecionado();
 
-    final kmDiurno = toDouble(resumo['km_diurno']);
-    final kmNoturno = toDouble(resumo['km_noturno']);
-    final kmFimSemana = toDouble(resumo['km_fim_semana']);
-    final kmFimSemanaNoturno = toDouble(resumo['km_fim_semana_noturno']);
-    final horasReserva = toDouble(resumo['horas_reserva']);
-    final horasSobreaviso = toDouble(resumo['horas_sobreaviso']);
+    final kmDiurno = toDouble(resumoAtual['km_diurno']);
+    final kmNoturno = toDouble(resumoAtual['km_noturno']);
+    final kmFimSemana = toDouble(resumoAtual['km_fim_semana']);
+    final kmFimSemanaNoturno = toDouble(resumoAtual['km_fim_semana_noturno']);
+    final horasReserva = toDouble(resumoAtual['horas_reserva']);
+    final horasSobreaviso = toDouble(resumoAtual['horas_sobreaviso']);
 
     final salarioBase = toDouble(config['salario_base']);
     final valorKmDiurno = kmDiurno * toDouble(config['km_diurno']);
@@ -1905,7 +1909,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     final proventos = [
       criarProvento(
-        'Salario Base',
+        'Salário base',
         1,
         toDouble(config['salario_base']),
         salarioBase,
@@ -1977,16 +1981,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     final descontos = [
       criarDesconto(
-        'Previdencia Privada',
+        'Previdência privada',
         previdenciaPrivada,
         descontoPrevidencia,
       ),
       criarDesconto(
-        'Assistencia Medica AMIL',
+        'Assistência médica AMIL',
         assistenciaMedicaAmil,
         descontoAmil,
       ),
-      criarDesconto('Servico de Saude DASA', servicoSaudeDasa, descontoDasa),
+      criarDesconto('Serviço de saúde DASA', servicoSaudeDasa, descontoDasa),
       criarDesconto(
         'Seguro de Vida Bradesco Funeral',
         seguroBradescoFuneral,
@@ -1998,12 +2002,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         descontoSeguroComplementar,
       ),
       criarDesconto(
-        'Assistencia Odonto Familia',
+        'Assistência odontológica familiar',
         assistenciaOdontoFamilia,
         descontoOdonto,
       ),
       criarDesconto('Gympass', gympass, descontoGympass),
-      criarDesconto('IRRF salario', '', irrfSalario),
+      criarDesconto('IRRF salário', '', irrfSalario),
     ];
 
     final descontoTotal = descontos.fold<double>(
@@ -2065,7 +2069,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   double calcularSeguroVidaComplementar(String opcao) {
-    if (opcao == 'Nao Utilizo') return 0;
+    if (opcao == 'Não utilizo' || opcao == 'Nao Utilizo') return 0;
     return double.tryParse(opcao.replaceAll(',', '.')) ?? 0;
   }
 
@@ -2182,13 +2186,13 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final irrfSalario = descontos
         .where(
           (linha) => (linha['descricao']?.toString().toUpperCase() ?? '')
-              .contains('IRRF SALARIO'),
+              .contains('IRRF SALÁRIO'),
         )
         .toList();
     final descontosSelecionaveis = descontos
         .where(
           (linha) => !(linha['descricao']?.toString().toUpperCase() ?? '')
-              .contains('IRRF SALARIO'),
+              .contains('IRRF SALÁRIO'),
         )
         .toList();
     final salario = toStringDynamicMap(holerite['salario']);
@@ -2762,12 +2766,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   Widget buildModernDiscountControl(String label, double width) {
-    if (label == 'Previdencia Privada') {
+    if (label == 'Previdência privada') {
       return modernDropdownControl<String>(
         width: width,
         value: previdenciaPrivada,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           '0%',
           '1%',
           '2%',
@@ -2787,7 +2791,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Assistencia Medica AMIL') {
+    if (label == 'Assistência médica AMIL') {
       return modernDropdownControl<int>(
         width: width,
         value: assistenciaMedicaAmil,
@@ -2800,7 +2804,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Servico de Saude DASA') {
+    if (label == 'Serviço de saúde DASA') {
       return modernSwitchControl(
         width: width,
         value: servicoSaudeDasa,
@@ -2821,7 +2825,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         width: width,
         value: seguroVidaComplementar,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           '39.93',
           '79.86',
           '119.79',
@@ -2833,7 +2837,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           '359.37',
           '399.30',
         ],
-        itemLabel: (value) => value == 'Nao Utilizo'
+        itemLabel: (value) => value == 'Não utilizo'
             ? value
             : 'R\$ ${value.replaceAll('.', ',')}',
         onChanged: (value) {
@@ -2843,12 +2847,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Assistencia Odonto Familia') {
+    if (label == 'Assistência odontológica familiar') {
       return modernDropdownControl<String>(
         width: width,
         value: assistenciaOdontoFamilia,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           'Dependentes',
           'Dependentes + 1 Agregado',
           'Dependentes + 2 Agregados',
@@ -2868,7 +2872,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         width: width,
         value: gympass,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           'Digital',
           'Starter',
           'Basic',
@@ -3032,7 +3036,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
   IconData iconForProvento(String descricao) {
     final text = descricao.toUpperCase();
-    if (text.contains('SALARIO')) return Icons.badge_outlined;
+    if (text.contains('SALÁRIO') || text.contains('SALARIO')) {
+      return Icons.badge_outlined;
+    }
     if (text.contains('KM')) return Icons.route_outlined;
     if (text.contains('RESERVA')) return Icons.event_available_outlined;
     if (text.contains('SOBREAVISO')) return Icons.notifications_none_outlined;
@@ -3264,7 +3270,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     dynamic option, {
     required double width,
   }) {
-    if (label == 'Previdencia Privada') {
+    if (label == 'Previdência privada') {
       return excelDropdownCell<String>(
         width: width,
         value: previdenciaPrivada,
@@ -3288,7 +3294,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Assistencia Medica AMIL') {
+    if (label == 'Assistência médica AMIL') {
       return excelDropdownCell<int>(
         width: width,
         value: assistenciaMedicaAmil,
@@ -3301,7 +3307,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Servico de Saude DASA') {
+    if (label == 'Serviço de saúde DASA') {
       return excelCheckboxCell(
         width: width,
         value: servicoSaudeDasa,
@@ -3323,7 +3329,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         width: width,
         value: seguroVidaComplementar,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           '39.93',
           '79.86',
           '119.79',
@@ -3335,7 +3341,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           '359.37',
           '399.30',
         ],
-        itemLabel: (value) => value == 'Nao Utilizo'
+        itemLabel: (value) => value == 'Não utilizo'
             ? value
             : 'R\$ ${value.replaceAll('.', ',')}',
         onChanged: (value) {
@@ -3345,12 +3351,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       );
     }
 
-    if (label == 'Assistencia Odonto Familia') {
+    if (label == 'Assistência odontológica familiar') {
       return excelDropdownCell<String>(
         width: width,
         value: assistenciaOdontoFamilia,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           'Dependentes',
           'Dependentes + 1 Agregado',
           'Dependentes + 2 Agregados',
@@ -3370,7 +3376,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
         width: width,
         value: gympass,
         items: const [
-          'Nao Utilizo',
+          'Não utilizo',
           'Digital',
           'Starter',
           'Basic',
@@ -3668,7 +3674,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  'Validador da Escala',
+                  'Validador da escala',
                   style: TextStyle(
                     fontSize: 21,
                     fontWeight: FontWeight.w900,
@@ -3850,7 +3856,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Nacional em R\$ e internacional em US\$. Exterior convertido no topo pela cotação automática.',
+              'Mês: ${contextoResumoSelecionado()}. Conta refeições dentro da jornada, com café a 25% e almoço, jantar e ceia pelo valor integral.',
               style: TextStyle(
                 color: isDark
                     ? Colors.white.withValues(alpha: 0.58)
@@ -3904,7 +3910,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final refeicoes = [
       ['Café', 'cafe'],
       ['Almoço', 'almoco'],
-      ['Janta', 'jantar'],
+      ['Jantar', 'jantar'],
       ['Ceia', 'ceia'],
     ];
 
@@ -4043,7 +4049,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           ),
           diariaRow('Café da Manhã', dadosGrupo, 'cafe', moeda),
           diariaRow('Almoço', dadosGrupo, 'almoco', moeda),
-          diariaRow('Janta', dadosGrupo, 'jantar', moeda),
+          diariaRow('Jantar', dadosGrupo, 'jantar', moeda),
           diariaRow('Ceia', dadosGrupo, 'ceia', moeda),
           TableRow(
             decoration: BoxDecoration(color: Colors.grey.shade300),
@@ -4156,6 +4162,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       icon: Icons.flight_takeoff_outlined,
       child: Column(
         children: [
+          if (mostrarUploadSuccess) ...[
+            buildUploadSuccessBanner(),
+            const SizedBox(height: 10),
+          ],
           buildEscalaFloatingSummaryBar(),
           const SizedBox(height: 10),
           Expanded(
@@ -4166,7 +4176,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               },
               child: ListView(
                 controller: escalaScrollController,
-                padding: EdgeInsets.zero,
+                padding: const EdgeInsets.only(bottom: 104),
                 children: [
                   if (eventos.isEmpty)
                     buildEscalaEmptyState()
@@ -4175,6 +4185,49 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildUploadSuccessBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF123A2A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.green.withValues(alpha: 0.44)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.green.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline, color: AppColors.green),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              selectedFileName == null
+                  ? 'Escala importada com sucesso.'
+                  : 'Escala importada com sucesso: $selectedFileName',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Fechar aviso',
+            onPressed: () => setState(() => mostrarUploadSuccess = false),
+            icon: const Icon(Icons.close, color: Colors.white70, size: 18),
           ),
         ],
       ),
@@ -5149,12 +5202,16 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     return Column(
       children: grupos.entries.map((entry) {
-        return buildDiaEscalaCard(entry.key, entry.value);
+        return buildDiaEscalaCard(entry.key, entry.value, eventos);
       }).toList(),
     );
   }
 
-  Widget buildDiaEscalaCard(String data, List<Map<String, String>> eventos) {
+  Widget buildDiaEscalaCard(
+    String data,
+    List<Map<String, String>> eventos,
+    List<Map<String, String>> todosEventos,
+  ) {
     final partes = data.split('/');
     final dia = partes.isNotEmpty ? partes[0] : data;
     final mes = partes.length >= 2 ? nomeMesCurto(partes[1]) : '';
@@ -5224,7 +5281,12 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               ),
               SizedBox(width: isMobile ? 6 : 9),
               Expanded(
-                child: Column(children: buildEventosComApresentacao(eventos)),
+                child: Column(
+                  children: buildEventosComApresentacao(
+                    eventos,
+                    todosEventos: todosEventos,
+                  ),
+                ),
               ),
             ],
           ),
@@ -5233,47 +5295,113 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  List<Widget> buildEventosComApresentacao(List<Map<String, String>> eventos) {
+  List<Widget> buildEventosComApresentacao(
+    List<Map<String, String>> eventos, {
+    required List<Map<String, String>> todosEventos,
+  }) {
     final widgets = <Widget>[];
-    String? ultimoDutyReport;
-    int? indiceInicioJornada;
 
     for (var i = 0; i < eventos.length; i++) {
       final event = eventos[i];
       final dutyReport = horarioLimpo(event['duty_report'] ?? '');
       final tipoAtual = (event['tipo'] ?? '').toUpperCase().trim();
+      final globalIndex = indiceEventoNaEscala(todosEventos, event);
+      final dutyAtivo = dutyReport.isNotEmpty
+          ? dutyReport
+          : dutyReportAtivoAntesDoEvento(todosEventos, globalIndex);
       final deveMostrarApresentacao =
-          tipoAtual == 'VOO' &&
-          dutyReport.isNotEmpty &&
-          dutyReport != ultimoDutyReport;
+          tipoAtual == 'VOO' && dutyReport.isNotEmpty;
 
       if (deveMostrarApresentacao) {
         widgets.add(buildDutyReportBanner(dutyReport));
-        ultimoDutyReport = dutyReport;
-        indiceInicioJornada = i;
       }
 
       widgets.add(buildEventoEscalaRow(event));
 
-      final proximo = i + 1 < eventos.length ? eventos[i + 1] : null;
-      final proximoDuty = horarioLimpo(proximo?['duty_report'] ?? '');
       final fimDaJornada =
           tipoAtual == 'VOO' &&
-          ultimoDutyReport != null &&
-          (proximo == null ||
-              (proximoDuty.isNotEmpty && proximoDuty != ultimoDutyReport));
+          dutyAtivo != null &&
+          !existeVooPosteriorNaMesmaJornada(
+            todosEventos,
+            globalIndex,
+            dutyAtivo,
+          );
 
-      if (fimDaJornada && indiceInicioJornada != null) {
+      if (fimDaJornada) {
+        final indiceInicioJornada = indiceInicioJornadaPorDuty(
+          todosEventos,
+          globalIndex,
+          dutyAtivo,
+        );
         final analise = calcularLimiteJornadaDaEscala(
-          eventos,
+          todosEventos,
           indiceInicioJornada,
-          ultimoDutyReport,
+          dutyAtivo,
         );
         widgets.add(buildEncerramentoJornadaBanner(analise));
       }
     }
 
     return widgets;
+  }
+
+  int indiceEventoNaEscala(
+    List<Map<String, String>> eventos,
+    Map<String, String> alvo,
+  ) {
+    final chave = chaveEventoEscala(alvo);
+    final index = eventos.indexWhere((event) => chaveEventoEscala(event) == chave);
+    return index < 0 ? 0 : index;
+  }
+
+  String chaveEventoEscala(Map<String, String> event) {
+    return [
+      event['data'] ?? '',
+      event['tipo'] ?? '',
+      event['identificacao'] ?? '',
+      event['origem'] ?? '',
+      event['destino'] ?? '',
+      event['saida'] ?? '',
+      event['chegada'] ?? '',
+    ].join('|');
+  }
+
+  String? dutyReportAtivoAntesDoEvento(
+    List<Map<String, String>> eventos,
+    int index,
+  ) {
+    if (index < 0 || index >= eventos.length) return null;
+    for (var i = index; i >= 0; i--) {
+      final duty = horarioLimpo(eventos[i]['duty_report'] ?? '');
+      if (duty.isNotEmpty) return duty;
+    }
+    return null;
+  }
+
+  int indiceInicioJornadaPorDuty(
+    List<Map<String, String>> eventos,
+    int index,
+    String dutyReport,
+  ) {
+    for (var i = index; i >= 0; i--) {
+      final duty = horarioLimpo(eventos[i]['duty_report'] ?? '');
+      if (duty.isNotEmpty) return i;
+    }
+    return index;
+  }
+
+  bool existeVooPosteriorNaMesmaJornada(
+    List<Map<String, String>> eventos,
+    int index,
+    String dutyReport,
+  ) {
+    for (var i = index + 1; i < eventos.length; i++) {
+      final event = eventos[i];
+      final outroDuty = horarioLimpo(event['duty_report'] ?? '');
+      if (outroDuty.isNotEmpty && outroDuty != dutyReport) return false;
+      if ((event['tipo'] ?? '').toUpperCase().trim() == 'VOO') return true;
+    }
+    return false;
   }
 
   Map<String, dynamic> calcularLimiteJornadaDaEscala(
@@ -5633,12 +5761,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                         child: routeContent,
                       ),
                     ),
-                    const SizedBox(width: 3),
-                    const Icon(
-                      Icons.chevron_right,
-                      color: Colors.white38,
-                      size: 18,
-                    ),
                   ],
                 )
               : Row(
@@ -5666,12 +5788,6 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                         alignment: Alignment.centerRight,
                         child: routeContent,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(
-                      Icons.chevron_right,
-                      color: Colors.white38,
-                      size: 20,
                     ),
                   ],
                 ),
@@ -6574,6 +6690,163 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     };
   }
 
+  Map<String, dynamic> resumoFinanceiroPeriodoSelecionado() {
+    final eventos = eventosParaResumoSelecionado();
+    var totalVoos = 0;
+    var totalReservas = 0;
+    var totalSobreavisos = 0;
+    var horasReserva = 0.0;
+    var horasSobreaviso = 0.0;
+    var kmTotal = 0.0;
+    var kmDiurno = 0.0;
+    var kmNoturno = 0.0;
+    var kmFimSemana = 0.0;
+    var kmFimSemanaNoturno = 0.0;
+    final voosSemDistancia = <String>{};
+    final diarias = estruturaDiariasVazia();
+    var totalDiariasBrl = 0.0;
+    var totalDiariasUsd = 0.0;
+
+    for (final event in eventos) {
+      final tipo = (event['tipo'] ?? '').toUpperCase();
+      final id = (event['identificacao'] ?? '').toUpperCase();
+      final isVoo = tipo == 'VOO';
+      final isReserva = tipo.contains('RESERVA') || id.startsWith('ASB');
+      final isSobreaviso = tipo.contains('SOBREAVISO') || id.startsWith('HSB');
+      final duracaoHoras = (duracaoAtividade(event)?.inMinutes ?? 0) / 60;
+
+      if (isVoo) {
+        totalVoos += 1;
+        final distancia = toDouble(event['distancia_km']);
+        kmTotal += distancia;
+        kmDiurno += toDouble(event['km_diurno']);
+        kmNoturno += toDouble(event['km_noturno']);
+        kmFimSemana += toDouble(event['km_fim_semana']);
+        kmFimSemanaNoturno += toDouble(event['km_fim_semana_noturno']);
+        if (distancia <= 0) {
+          voosSemDistancia.add(
+            '${event['origem'] ?? ''}-${event['destino'] ?? ''}',
+          );
+        }
+      }
+
+      if (isReserva) {
+        totalReservas += 1;
+        horasReserva += duracaoHoras;
+      }
+      if (isSobreaviso) {
+        totalSobreavisos += 1;
+        horasSobreaviso += duracaoHoras;
+      }
+
+      final grupo = (event['grupo_diaria'] ?? '').isEmpty
+          ? 'NACIONAL'
+          : event['grupo_diaria']!;
+      if (!diarias.containsKey(grupo)) continue;
+      final moeda = (event['moeda_diaria'] ?? '').isEmpty
+          ? obterMoedaPadraoDoGrupo(grupo)
+          : event['moeda_diaria']!;
+
+      for (final refeicao in ['cafe', 'almoco', 'jantar', 'ceia']) {
+        if ((event[refeicao] ?? '').toUpperCase() != 'SIM') continue;
+        final valor = valorUnitarioDiaria(grupo, refeicao);
+        final dadosGrupo = toStringDynamicMap(diarias[grupo]);
+        final dadosRefeicao = toStringDynamicMap(dadosGrupo[refeicao]);
+        dadosRefeicao['quantidade'] = toDouble(dadosRefeicao['quantidade']) + 1;
+        dadosRefeicao['valor_total'] =
+            toDouble(dadosRefeicao['valor_total']) + valor;
+        dadosGrupo[refeicao] = dadosRefeicao;
+        dadosGrupo['moeda'] = moeda;
+        dadosGrupo['total'] = toDouble(dadosGrupo['total']) + valor;
+        diarias[grupo] = dadosGrupo;
+        if (moeda == 'BRL') {
+          totalDiariasBrl += valor;
+        } else {
+          totalDiariasUsd += valor;
+        }
+      }
+    }
+
+    arredondarDiarias(diarias);
+
+    return {
+      'total_eventos': eventos.length,
+      'total_voos': totalVoos,
+      'total_reservas': totalReservas,
+      'total_sobreavisos': totalSobreavisos,
+      'horas_reserva': horasReserva,
+      'horas_sobreaviso': horasSobreaviso,
+      'km_total': kmTotal.round(),
+      'km_diurno': kmDiurno.round(),
+      'km_noturno': kmNoturno.round(),
+      'km_fim_semana': kmFimSemana.round(),
+      'km_fim_semana_noturno': kmFimSemanaNoturno.round(),
+      'voos_sem_distancia': voosSemDistancia.toList()..sort(),
+      'diarias': diarias,
+      'total_diarias_brl': arredondarMoeda(totalDiariasBrl),
+      'total_diarias_usd': arredondarMoeda(totalDiariasUsd),
+    };
+  }
+
+  Map<String, dynamic> estruturaDiariasVazia() {
+    final resultado = <String, dynamic>{};
+    for (final grupo in ['NACIONAL', 'ARGENTINA', 'CHILE', 'AMERICA_DO_SUL']) {
+      resultado[grupo] = {
+        'moeda': obterMoedaPadraoDoGrupo(grupo),
+        'cafe': {
+          'quantidade': 0,
+          'valor_unitario': valorUnitarioDiaria(grupo, 'cafe'),
+          'valor_total': 0,
+        },
+        'almoco': {
+          'quantidade': 0,
+          'valor_unitario': valorUnitarioDiaria(grupo, 'almoco'),
+          'valor_total': 0,
+        },
+        'jantar': {
+          'quantidade': 0,
+          'valor_unitario': valorUnitarioDiaria(grupo, 'jantar'),
+          'valor_total': 0,
+        },
+        'ceia': {
+          'quantidade': 0,
+          'valor_unitario': valorUnitarioDiaria(grupo, 'ceia'),
+          'valor_total': 0,
+        },
+        'total': 0,
+      };
+    }
+    return resultado;
+  }
+
+  double valorUnitarioDiaria(String grupo, String refeicao) {
+    final principal = switch (grupo) {
+      'ARGENTINA' => 22.05,
+      'CHILE' => 25.15,
+      'AMERICA_DO_SUL' => 21.00,
+      _ => 105.04,
+    };
+    return refeicao == 'cafe' ? principal * 0.25 : principal;
+  }
+
+  void arredondarDiarias(Map<String, dynamic> diarias) {
+    for (final grupo in ['NACIONAL', 'ARGENTINA', 'CHILE', 'AMERICA_DO_SUL']) {
+      final dadosGrupo = toStringDynamicMap(diarias[grupo]);
+      for (final refeicao in ['cafe', 'almoco', 'jantar', 'ceia']) {
+        final dados = toStringDynamicMap(dadosGrupo[refeicao]);
+        dados['valor_unitario'] = arredondarMoeda(dados['valor_unitario']);
+        dados['valor_total'] = arredondarMoeda(dados['valor_total']);
+        dadosGrupo[refeicao] = dados;
+      }
+      dadosGrupo['total'] = arredondarMoeda(dadosGrupo['total']);
+      diarias[grupo] = dadosGrupo;
+    }
+  }
+
+  double arredondarMoeda(dynamic valor) {
+    return (toDouble(valor) * 100).round() / 100;
+  }
+
   List<Map<String, String>> eventosParaResumoSelecionado() {
     final eventosBase = eventosEscalaContinua();
     final referencia = referenciaPeriodoEscala();
@@ -6616,6 +6889,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   String mesKeyResumoAtual(DateTime referencia) {
+    if (selectedEscalaMesKey != null) return selectedEscalaMesKey!;
     if (escalaMesResumoKey != null) return escalaMesResumoKey!;
     return '${referencia.year}-${referencia.month.toString().padLeft(2, '0')}';
   }
@@ -6942,7 +7216,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           final jornadaSmallFieldWidth = isMobile ? double.infinity : 190.0;
           return ListView(
             controller: jornadaScrollController,
-            padding: EdgeInsets.zero,
+            padding: const EdgeInsets.only(bottom: 104),
             children: [
               Container(
                 padding: EdgeInsets.all(isMobile ? 12 : 18),
@@ -7857,7 +8131,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
               DataColumn(label: Text('Duty Debrief')),
               DataColumn(label: Text('Café')),
               DataColumn(label: Text('Almoço')),
-              DataColumn(label: Text('Janta')),
+              DataColumn(label: Text('Jantar')),
               DataColumn(label: Text('Ceia')),
               DataColumn(label: Text('Grupo Diária')),
               DataColumn(label: Text('Moeda')),
@@ -7904,7 +8178,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       subtitle: 'Cadastro, assinatura, pagamento e preferências do cliente.',
       icon: Icons.person_outline,
       child: ListView(
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.only(bottom: 104),
         children: [
           buildCustomerProfileHeader(),
           const SizedBox(height: 18),
@@ -8349,7 +8623,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           'Corrija rotas sem distância e mantenha uma lista local de aeroportos pendentes.',
       icon: Icons.place_outlined,
       child: ListView(
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.only(bottom: 104),
         children: [
           GlassCard(
             child: Padding(
@@ -8585,6 +8859,17 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 ),
                 const SizedBox(height: 16),
                 option(
+                  icon: Icons.slideshow_outlined,
+                  title: 'Apresentação 16:9',
+                  subtitle:
+                      'Formato horizontal, mais bonito para visualizar e compartilhar.',
+                  onTap: () {
+                    Navigator.pop(context);
+                    imprimirPdfEscala(compacto: false, widescreen: true);
+                  },
+                ),
+                const SizedBox(height: 10),
+                option(
                   icon: Icons.fit_screen_outlined,
                   title: 'Celular 9:16',
                   subtitle:
@@ -8612,7 +8897,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     );
   }
 
-  Future<void> imprimirPdfEscala({required bool compacto}) async {
+  Future<void> imprimirPdfEscala({
+    required bool compacto,
+    bool widescreen = false,
+  }) async {
     final eventos = eventosPrincipaisDaEscala();
     final grouped = <String, List<Map<String, String>>>{};
     for (final event in eventos) {
@@ -8649,29 +8937,47 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     String jornadaHtml(List<Map<String, String>> eventosDoDia) {
       final parts = <String>[];
-      String? ultimoReport;
 
       for (var i = 0; i < eventosDoDia.length; i++) {
         final event = eventosDoDia[i];
         final tipo = (event['tipo'] ?? '').toUpperCase();
         final dutyReport = horarioLimpo(event['duty_report'] ?? '');
+        final globalIndex = indiceEventoNaEscala(eventos, event);
+        final dutyAtivo = dutyReport.isNotEmpty
+            ? dutyReport
+            : dutyReportAtivoAntesDoEvento(eventos, globalIndex);
 
-        if (tipo == 'VOO' &&
-            dutyReport.isNotEmpty &&
-            dutyReport != ultimoReport) {
+        if (tipo == 'VOO' && dutyReport.isNotEmpty) {
           final analise = calcularLimiteJornadaDaEscala(
-            eventosDoDia,
-            i,
+            eventos,
+            globalIndex,
             dutyReport,
           );
-          final limite = analise['limite_jornada_horario']?.toString() ?? '';
+          final limite = analise['termino_texto']?.toString() ?? '';
           parts.add(
-            '<div class="report"><b>Apresentação</b> ${esc(dutyReport)}${limite.isNotEmpty ? ' · Limite de jornada ${esc(limite)}' : ''}</div>',
+            '<div class="report"><b>Apresentação</b> <span>${esc(dutyReport)}</span>${limite.isNotEmpty ? ' · Fim limite ${esc(limite)}' : ''}</div>',
           );
-          ultimoReport = dutyReport;
         }
 
         parts.add(eventHtml(event));
+
+        final fimDaJornada =
+            tipo == 'VOO' &&
+            dutyAtivo != null &&
+            !existeVooPosteriorNaMesmaJornada(eventos, globalIndex, dutyAtivo);
+        if (fimDaJornada) {
+          final analise = calcularLimiteJornadaDaEscala(
+            eventos,
+            indiceInicioJornadaPorDuty(eventos, globalIndex, dutyAtivo),
+            dutyAtivo,
+          );
+          final termino = analise['termino_texto']?.toString() ?? '';
+          if (termino.isNotEmpty) {
+            parts.add(
+              '<div class="report end"><b>Fim limite de jornada</b> <span>${esc(termino)}</span></div>',
+            );
+          }
+        }
       }
 
       return parts.join();
@@ -8788,11 +9094,80 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 </html>
 """;
 
+    final contentWidescreen =
+        """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Crew 4U - Escala 16:9</title>
+<style>
+  @page { size: 192mm 108mm; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, sans-serif; background: #020817; color: white; }
+  .deck { min-height: 100vh; padding: 16px; background:
+    radial-gradient(circle at 88% 0%, rgba(24,200,255,.24), transparent 28%),
+    linear-gradient(135deg, #020817 0%, #071A34 58%, #031021 100%); }
+  .hero { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; margin-bottom: 12px; }
+  .brand, .stats, .day { border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.07); border-radius: 18px; box-shadow: 0 18px 40px rgba(0,0,0,.22); }
+  .brand { padding: 18px; min-height: 126px; display: flex; flex-direction: column; justify-content: space-between; }
+  .logo { font-size: 31px; font-weight: 300; letter-spacing: -2px; }
+  .logo span { color: #128DFF; font-size: 48px; font-weight: 200; margin: 0 -4px; text-shadow: 0 0 18px rgba(24,200,255,.65); }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -.5px; }
+  .brand p { margin: 6px 0 0; color: rgba(255,255,255,.68); font-size: 12px; font-weight: 800; }
+  .stats { padding: 14px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; align-content: stretch; }
+  .stat { border-radius: 14px; background: rgba(255,255,255,.08); padding: 10px; border: 1px solid rgba(255,255,255,.08); }
+  .stat span { display: block; color: rgba(255,255,255,.58); font-size: 9px; font-weight: 900; text-transform: uppercase; }
+  .stat b { display: block; margin-top: 6px; font-size: 17px; }
+  .days { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .day { overflow: hidden; page-break-inside: avoid; }
+  h2 { margin: 0; padding: 8px 11px; background: rgba(18,141,255,.18); color: #BFEAFF; font-size: 12px; letter-spacing: .4px; }
+  .report { margin: 7px 8px 0; padding: 7px 9px; border-radius: 10px; color: #8CE4FF; background: rgba(24,200,255,.12); border: 1px solid rgba(24,200,255,.23); font-size: 10px; font-weight: 900; }
+  .report span { color: white; font-size: 12px; }
+  .event { display: grid; grid-template-columns: .95fr 1.1fr .72fr; gap: 7px; align-items: center; padding: 8px 9px; border-top: 1px solid rgba(255,255,255,.08); font-size: 10.5px; line-height: 1.18; }
+  .event b { display: inline-block; min-width: 42px; font-size: 9.5px; color: rgba(255,255,255,.74); }
+  .voo { border-left: 4px solid #128DFF; }
+  .reserva { border-left: 4px solid #F05252; }
+  .sobreaviso { border-left: 4px solid #F6B21A; }
+  .folga { border-left: 4px solid #19A65A; }
+</style>
+<script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); };</script>
+</head>
+<body>
+  <main class="deck">
+    <section class="hero">
+      <div class="brand">
+        <div class="logo">crew<span>4</span>u</div>
+        <div>
+          <h1>Escala ${esc(mesReferenciaEscala())}</h1>
+          <p>Apresentações, voos, reservas, sobreavisos e folgas em visão horizontal.</p>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>Horas</span><b>${esc(horasVoo)}</b></div>
+        <div class="stat"><span>KM</span><b>${esc(kmTotal)}</b></div>
+        <div class="stat"><span>Reservas</span><b>${esc(reservas)}</b></div>
+        <div class="stat"><span>Sobreav.</span><b>${esc(sobreavisos)}</b></div>
+        <div class="stat"><span>Folgas</span><b>${esc(folgas)}</b></div>
+      </div>
+    </section>
+    <section class="days">$dias</section>
+  </main>
+</body>
+</html>
+""";
+
     final result = await documentService.openPrintableHtml(
-      filename: compacto
+      filename: widescreen
+          ? 'crew4u_escala_16x9.html'
+          : compacto
           ? 'crew4u_escala_celular.html'
           : 'crew4u_escala_a4.html',
-      content: compacto ? contentCompacto : contentA4,
+      content: widescreen
+          ? contentWidescreen
+          : compacto
+          ? contentCompacto
+          : contentA4,
     );
     showSnack(result.message);
   }
@@ -8803,7 +9178,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final baseIr = toStringDynamicMap(holerite['base_ir']);
     final descontos = holerite['descontos'] as List<dynamic>;
     final salario = toStringDynamicMap(holerite['salario']);
-    final diarias = toStringDynamicMap(resumo['diarias']);
+    final diarias = toStringDynamicMap(
+      resumoFinanceiroPeriodoSelecionado()['diarias'],
+    );
 
     String esc(dynamic value) {
       return value
@@ -8860,7 +9237,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           <tr><th></th><th>Quantidade</th><th>Valor</th></tr>
           ${row('Café da Manhã', 'cafe')}
           ${row('Almoço', 'almoco')}
-          ${row('Janta', 'jantar')}
+          ${row('Jantar', 'jantar')}
           ${row('Ceia', 'ceia')}
           <tr><td class="left"><b>TOTAL</b></td><td></td><td><b>${esc(formatarMoeda(dados['total'], moeda))}</b></td></tr>
         </table>
