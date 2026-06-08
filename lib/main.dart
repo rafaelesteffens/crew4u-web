@@ -5343,6 +5343,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final dutyAtivo = dutyReport.isNotEmpty
           ? dutyReport
           : dutyReportAtivoAntesDoEvento(todosEventos, globalIndex);
+      final isContinuacao = tipoAtual == 'CONTINUACAO_JORNADA';
       final deveMostrarApresentacao =
           tipoAtual == 'VOO' && dutyReport.isNotEmpty;
 
@@ -5354,6 +5355,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
       final fimDaJornada =
           tipoAtual == 'VOO' &&
+          !isContinuacao &&
           dutyAtivo != null &&
           !existeVooPosteriorNaMesmaJornada(
             todosEventos,
@@ -5668,6 +5670,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final tipo = (event['tipo'] ?? '').toUpperCase();
     final idUpper = (event['identificacao'] ?? '').toUpperCase();
     final isVoo = tipo == 'VOO';
+    final isContinuacao = tipo == 'CONTINUACAO_JORNADA';
     final isSobreaviso =
         tipo.contains('SOBREAVISO') || idUpper.startsWith('HSB');
     final isReserva = tipo.contains('RESERVA') || idUpper.startsWith('ASB');
@@ -5684,7 +5687,11 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final IconData icon;
     final String label;
 
-    if (isVoo) {
+    if (isContinuacao) {
+      color = const Color(0xFF2DD4BF);
+      icon = Icons.timeline_outlined;
+      label = 'Continua';
+    } else if (isVoo) {
       color = AppColors.blue;
       icon = Icons.flight_takeoff;
       label = 'Voo';
@@ -5762,16 +5769,18 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             : Text(
                 isFolga
                     ? 'Dia livre'
+                    : isContinuacao
+                    ? textoContinuacaoJornada(event)
                     : isDescanso
                     ? (origem.isEmpty
                           ? 'Descanso fora da base'
                           : 'Descanso em $origem')
                     : formatarIntervaloEvento(saida, chegada),
-                maxLines: 1,
+                maxLines: isContinuacao ? 2 : 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: isMobile ? 13 : 13,
+                  fontSize: isContinuacao ? 11 : 13,
                   fontWeight: FontWeight.w800,
                 ),
               );
@@ -6329,6 +6338,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   }
 
   String duracaoAtividadeTexto(Map<String, String> event) {
+    if ((event['tipo'] ?? '').toUpperCase() == 'CONTINUACAO_JORNADA') {
+      return '';
+    }
     if (ehFolgaOuDayOff(event)) return '';
 
     final duracao = duracaoAtividade(event);
@@ -6992,6 +7004,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   DateTime? inicioEventoDateTime(Map<String, String> event) {
     final dataBase = parseDataPtBr(event['data'] ?? '');
     if (dataBase == null) return null;
+    if ((event['tipo'] ?? '').toUpperCase() == 'CONTINUACAO_JORNADA') {
+      return DateTime(dataBase.year, dataBase.month, dataBase.day);
+    }
     if (ehFolgaOuDayOff(event)) {
       return DateTime(dataBase.year, dataBase.month, dataBase.day, 0, 0);
     }
@@ -7019,6 +7034,20 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
   DateTime? fimEventoDateTime(Map<String, String> event) {
     final dataBase = parseDataPtBr(event['data'] ?? '');
     if (dataBase == null) return null;
+    if ((event['tipo'] ?? '').toUpperCase() == 'CONTINUACAO_JORNADA') {
+      final chegada = primeiroHorarioValido([event['chegada'], event['saida']]);
+      final minutos = chegada == null ? null : parseHoraMinuto(chegada);
+      if (minutos == null) {
+        return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
+      }
+      return DateTime(
+        dataBase.year,
+        dataBase.month,
+        dataBase.day,
+        minutos ~/ 60,
+        minutos % 60,
+      );
+    }
     if (ehFolgaOuDayOff(event)) {
       return DateTime(dataBase.year, dataBase.month, dataBase.day, 23, 59);
     }
@@ -7039,8 +7068,9 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final inicio = inicioEventoDateTime(event);
 
     final dataFim = parseDataIso(event['data_fim_iso'] ?? '');
-    final dataReferencia =
-        dataFim != null && dataFim.isAfter(dataBase) ? dataFim : dataBase;
+    final dataReferencia = dataFim != null && dataFim.isAfter(dataBase)
+        ? dataFim
+        : dataBase;
     if (dataFim != null && dataFim.isAfter(dataBase)) {
       extraDias = 0;
     }
@@ -7108,9 +7138,103 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       final data = (event['data'] ?? '').isEmpty ? 'Sem data' : event['data']!;
       grupos.putIfAbsent(data, () => []);
       grupos[data]!.add(event);
+
+      for (final continuacao in criarContinuacoesDeJornada(event)) {
+        final dataContinuacao = continuacao['data'] ?? '';
+        if (dataContinuacao.isEmpty) continue;
+        grupos.putIfAbsent(dataContinuacao, () => []);
+        grupos[dataContinuacao]!.add(continuacao);
+      }
+    }
+
+    for (final entry in grupos.entries) {
+      final temAtividade = entry.value.any((event) {
+        final tipo = (event['tipo'] ?? '').toUpperCase();
+        return tipo != 'FOLGA' && !ehFolgaOuDayOff(event);
+      });
+
+      if (temAtividade) {
+        entry.value.removeWhere(ehFolgaOuDayOff);
+      }
+
+      entry.value.sort((a, b) {
+        final inicioA =
+            inicioEventoDateTime(a) ?? fimEventoDateTime(a) ?? DateTime(2100);
+        final inicioB =
+            inicioEventoDateTime(b) ?? fimEventoDateTime(b) ?? DateTime(2100);
+        return inicioA.compareTo(inicioB);
+      });
     }
 
     return grupos;
+  }
+
+  List<Map<String, String>> criarContinuacoesDeJornada(
+    Map<String, String> event,
+  ) {
+    final tipo = (event['tipo'] ?? '').toUpperCase();
+    if (tipo != 'VOO' &&
+        !tipo.contains('RESERVA') &&
+        !tipo.contains('SOBREAVISO')) {
+      return const [];
+    }
+
+    final dataEscala = parseDataPtBr(event['data'] ?? '');
+    final inicio = inicioEventoDateTime(event);
+    final fim = fimEventoDateTime(event);
+    if (dataEscala == null || inicio == null || fim == null) return const [];
+
+    final diaEscala = inicioDoDia(dataEscala);
+    final diaFim = inicioDoDia(
+      fim.isAfter(inicio) || fim.isAtSameMomentAs(inicio) ? fim : inicio,
+    );
+    if (!diaFim.isAfter(diaEscala)) return const [];
+
+    final continuacoes = <Map<String, String>>[];
+    var cursor = diaEscala.add(const Duration(days: 1));
+    while (!cursor.isAfter(diaFim)) {
+      final dataContinuacao = formatarDataPtBr(cursor);
+      continuacoes.add({
+        ...event,
+        'data': dataContinuacao,
+        'tipo': 'CONTINUACAO_JORNADA',
+        'identificacao': event['identificacao'] ?? '',
+        'origem': event['origem'] ?? '',
+        'destino': event['destino'] ?? '',
+        'saida': cursor.isAtSameMomentAs(diaFim)
+            ? horarioLimpo(event['chegada'] ?? '')
+            : '00:00',
+        'chegada': cursor.isAtSameMomentAs(diaFim)
+            ? horarioLimpo(event['chegada'] ?? '')
+            : '23:59',
+        'data_inicio_original': event['data'] ?? '',
+      });
+      cursor = cursor.add(const Duration(days: 1));
+    }
+
+    return continuacoes;
+  }
+
+  String textoContinuacaoJornada(Map<String, String> event) {
+    final origemData = event['data_inicio_original'] ?? '';
+    final chegada = horarioLimpo(event['chegada'] ?? '');
+    final destino = event['destino'] ?? '';
+    final partes = <String>[];
+
+    if (origemData.isNotEmpty) {
+      partes.add('Iniciado ${dataCurta(origemData)}');
+    }
+    if (chegada.isNotEmpty) {
+      partes.add(destino.isEmpty ? 'até $chegada' : 'até $chegada $destino');
+    }
+
+    return partes.isEmpty ? 'Continuação da jornada' : partes.join(' ');
+  }
+
+  String dataCurta(String data) {
+    final parts = data.split('/');
+    if (parts.length < 2) return data;
+    return '${parts[0]}/${parts[1]}';
   }
 
   String calcularHorasVooFormatadas() {
