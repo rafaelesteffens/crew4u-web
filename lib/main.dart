@@ -8930,21 +8930,10 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 ),
                 const SizedBox(height: 16),
                 option(
-                  icon: Icons.slideshow_outlined,
-                  title: 'Apresentação 16:9',
-                  subtitle:
-                      'Formato horizontal, mais bonito para visualizar e compartilhar.',
-                  onTap: () {
-                    Navigator.pop(context);
-                    imprimirPdfEscala(compacto: false, widescreen: true);
-                  },
-                ),
-                const SizedBox(height: 10),
-                option(
                   icon: Icons.fit_screen_outlined,
-                  title: 'Celular 9:16',
+                  title: 'Relatório vertical',
                   subtitle:
-                      'Lista vertical bonita, no formato que cabe melhor na tela.',
+                      'Escala comprida, grande e detalhada para salvar como PDF.',
                   onTap: () {
                     Navigator.pop(context);
                     imprimirPdfEscala(compacto: true);
@@ -8954,10 +8943,22 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
                 option(
                   icon: Icons.article_outlined,
                   title: 'A4 completo',
-                  subtitle: 'Versão elegante para imprimir ou guardar em PDF.',
+                  subtitle:
+                      'Relatório claro em páginas A4, melhor para imprimir.',
                   onTap: () {
                     Navigator.pop(context);
                     imprimirPdfEscala(compacto: false);
+                  },
+                ),
+                const SizedBox(height: 10),
+                option(
+                  icon: Icons.slideshow_outlined,
+                  title: 'Apresentação 16:9',
+                  subtitle:
+                      'Formato horizontal para apresentação ou visual rápido.',
+                  onTap: () {
+                    Navigator.pop(context);
+                    imprimirPdfEscala(compacto: false, widescreen: true);
                   },
                 ),
               ],
@@ -8982,28 +8983,62 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     String eventHtml(Map<String, String> event) {
       final tipo = (event['tipo'] ?? '').toUpperCase();
-      final id = event['identificacao'] ?? '';
+      final id = tipo == 'VOO' ? event['identificacao'] ?? '' : '';
       final origem = event['origem'] ?? '';
       final destino = event['destino'] ?? '';
       final saida = limparHoraParaExibicao(event['saida'] ?? '');
       final chegada = limparHoraParaExibicao(event['chegada'] ?? '');
       final isFolga = ehFolgaOuDayOff(event);
+      final isDescanso = tipo == 'DESCANSO';
+      final isReserva = tipo.contains('RESERVA');
+      final isSobreaviso = tipo.contains('SOBREAVISO');
+      final duracao = duracaoAtividadeTexto(event);
       final cls = tipo == 'VOO'
           ? 'voo'
-          : tipo.contains('RESERVA')
+          : isReserva
           ? 'reserva'
-          : tipo.contains('SOBREAVISO')
+          : isSobreaviso
           ? 'sobreaviso'
+          : isDescanso
+          ? 'inativo'
           : 'folga';
+      final label = tipo == 'VOO'
+          ? 'Voo'
+          : isReserva
+          ? 'Reserva'
+          : isSobreaviso
+          ? 'Sobreaviso'
+          : isDescanso
+          ? 'Inativo'
+          : 'Folga';
       final detalhe = tipo == 'VOO'
           ? '$origem → $destino'
-          : (isFolga ? 'Dia livre' : formatarIntervaloEvento(saida, chegada));
-      final horario = isFolga
+          : isFolga
+          ? 'Dia livre'
+          : isDescanso
+          ? 'Inativo'
+          : formatarIntervaloEvento(saida, chegada);
+      final horario = tipo == 'VOO'
+          ? '$saida – $chegada'
+          : isFolga || isDescanso
           ? ''
-          : (tipo == 'VOO'
-                ? '$saida – $chegada'
-                : formatarIntervaloEvento(saida, chegada));
-      return '<div class="event $cls"><div><b>${esc(isFolga ? 'FOLGA' : tipo)}</b> ${esc(id)}</div><div>${esc(detalhe)}</div><div>${esc(horario)}</div></div>';
+          : formatarIntervaloEvento(saida, chegada);
+      final duracaoHtml = duracao.isEmpty
+          ? ''
+          : '<span class="duration">${esc(duracao)}</span>';
+      final idHtml = id.isEmpty ? '' : '<strong>${esc(id)}</strong>';
+
+      return '''
+        <div class="event $cls">
+          <div class="event-main">
+            <span class="pill">$label</span>
+            $idHtml
+            $duracaoHtml
+          </div>
+          <div class="route">${esc(detalhe)}</div>
+          <div class="time">${esc(horario)}</div>
+        </div>
+      ''';
     }
 
     String jornadaHtml(List<Map<String, String>> eventosDoDia) {
@@ -9019,14 +9054,8 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
             : dutyReportAtivoAntesDoEvento(eventos, globalIndex);
 
         if (tipo == 'VOO' && dutyReport.isNotEmpty) {
-          final analise = calcularLimiteJornadaDaEscala(
-            eventos,
-            globalIndex,
-            dutyReport,
-          );
-          final limite = analise['termino_texto']?.toString() ?? '';
           parts.add(
-            '<div class="report"><b>Apresentação</b> <span>${esc(dutyReport)}</span>${limite.isNotEmpty ? ' · Fim limite ${esc(limite)}' : ''}</div>',
+            '<div class="report"><b>Apresentação</b><span>${esc(dutyReport)}</span></div>',
           );
         }
 
@@ -9045,7 +9074,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
           final termino = analise['termino_texto']?.toString() ?? '';
           if (termino.isNotEmpty) {
             parts.add(
-              '<div class="report end"><b>Fim limite de jornada</b> <span>${esc(termino)}</span></div>',
+              '<div class="report end"><b>Limite da jornada</b><span>${esc(termino)}</span></div>',
             );
           }
         }
@@ -9056,8 +9085,21 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
 
     String dayHtml(MapEntry<String, List<Map<String, String>>> entry) {
       final data = entry.key;
+      final partes = data.split('/');
+      final dia = partes.isNotEmpty ? partes.first : data;
+      final mes = partes.length > 1 ? nomeMesCurto(partes[1]) : '';
+      final semana = diaSemanaCurto(data);
       final eventosHtml = jornadaHtml(entry.value);
-      return '<section class="day"><h2>${esc(data)}</h2>$eventosHtml</section>';
+      return '''
+        <section class="day">
+          <aside class="datebox">
+            <span>${esc(semana)}</span>
+            <strong>${esc(dia)}</strong>
+            <small>${esc(mes)}</small>
+          </aside>
+          <div class="daybody">$eventosHtml</div>
+        </section>
+      ''';
     }
 
     final dias = grouped.entries.map(dayHtml).join();
@@ -9069,101 +9111,258 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
     final reservas = (resumoPeriodo['reservas'] ?? 0).toString();
     final sobreavisos = (resumoPeriodo['sobreavisos'] ?? 0).toString();
     final folgas = (resumoPeriodo['folgas'] ?? 0).toString();
+    final holerite = calcularHoleriteLocal();
+    final salario = toStringDynamicMap(holerite['salario']);
+    final financeiro = resumoFinanceiroPeriodoSelecionado();
+    final diariasBrl = formatarMoeda(financeiro['total_diarias_brl'], 'BRL');
+    final diariasUsd = formatarMoeda(financeiro['total_diarias_usd'], 'USD');
+    final periodo = mesReferenciaEscala();
+    final arquivo = selectedFileName ?? 'Escala importada';
 
-    final contentCompacto =
-        """
+    String stat(String label, String value) {
+      return '<div class="stat"><span>${esc(label)}</span><b>${esc(value)}</b></div>';
+    }
+
+    String htmlRelatorio({
+      required String pageSize,
+      required bool dark,
+      required bool compact,
+    }) {
+      final bg = dark ? '#020817' : '#F4F8FC';
+      final fg = dark ? '#FFFFFF' : '#061329';
+      final panel = dark ? 'rgba(255,255,255,.070)' : '#FFFFFF';
+      final border = dark ? 'rgba(255,255,255,.11)' : '#D8E2EE';
+      final muted = dark ? 'rgba(255,255,255,.62)' : '#64748B';
+      final reportBg = dark ? 'rgba(24,200,255,.10)' : '#E8F4FF';
+      final reportFg = dark ? '#8CE4FF' : '#075CA8';
+      final headerBg = dark
+          ? 'linear-gradient(145deg, #020817, #071A34 62%, #031021)'
+          : 'linear-gradient(135deg, #061329, #0A1C38)';
+      final bodyWidth = compact ? '430px' : '100%';
+      final bodyMargin = compact ? '0 auto' : '0';
+      final eventCols = compact ? '1fr' : '1.08fr 1fr .72fr';
+      final eventGap = compact ? '4px' : '10px';
+      final eventFont = compact ? '14px' : '12px';
+      final dateWidth = compact ? '58px' : '70px';
+      final dayPadding = compact ? '10px' : '12px';
+
+      return '''
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Crew 4U - Escala celular</title>
+<title>Crew 4U - Relatório de Escala</title>
 <style>
-  @page { size: 90mm 160mm; margin: 0; }
+  @page { size: $pageSize; margin: ${compact ? '0' : '10mm'}; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, sans-serif; background: #020817; color: white; }
-  .canvas { width: 100%; min-height: 100vh; padding: 12px; background:
-    radial-gradient(circle at 88% 3%, rgba(24,200,255,.18), transparent 24%),
-    linear-gradient(160deg, #020817 0%, #071a34 58%, #031021 100%); }
-  .top { border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.065); border-radius: 18px; padding: 13px; margin-bottom: 10px; }
-  .logo { font-size: 26px; line-height: .9; letter-spacing: -1.6px; font-weight: 300; }
-  .logo span { color: #128DFF; font-size: 39px; font-weight: 200; margin: 0 -3px; text-shadow: 0 0 14px rgba(24,200,255,.50); }
-  .title { margin-top: 8px; }
-  .title h1 { margin: 0; font-size: 20px; letter-spacing: -.3px; }
-  .title p { margin: 4px 0 0; color: rgba(255,255,255,.64); font-size: 11px; font-weight: 800; }
-  .days { display: block; }
-  .day { border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.070); border-radius: 16px; overflow: hidden; margin-bottom: 10px; break-inside: avoid; }
-  h2 { margin: 0; padding: 9px 11px; background: rgba(18,141,255,.18); font-size: 12px; letter-spacing: .4px; }
-  .report { margin: 8px 9px 0; padding: 8px 9px; border-radius: 10px; color: #8ce4ff; background: rgba(24,200,255,.10); border: 1px solid rgba(24,200,255,.20); font-size: 10.5px; font-weight: 800; }
-  .event { display: grid; grid-template-columns: 1fr 1fr .82fr; gap: 6px; align-items: center; padding: 10px 9px; border-top: 1px solid rgba(255,255,255,.08); font-size: 11.4px; line-height: 1.2; }
-  .event b { font-size: 10.5px; }
-  .voo { border-left: 4px solid #128DFF; }
-  .reserva { border-left: 4px solid #F05252; }
-  .sobreaviso { border-left: 4px solid #F6B21A; }
-  .folga { border-left: 4px solid #19A65A; }
-  .foot { color: rgba(255,255,255,.42); font-size: 9px; font-weight: 800; text-align: center; padding: 5px 0 0; }
+  body {
+    margin: 0;
+    background: $bg;
+    color: $fg;
+    font-family: Arial, Helvetica, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .canvas {
+    width: $bodyWidth;
+    margin: $bodyMargin;
+    min-height: 100vh;
+    padding: ${compact ? '14px 12px 22px' : '0'};
+    background: $bg;
+  }
+  .hero {
+    color: white;
+    background: $headerBg;
+    border-radius: ${compact ? '22px' : '24px'};
+    padding: ${compact ? '18px' : '22px'};
+    margin-bottom: 12px;
+    box-shadow: 0 16px 36px rgba(0,0,0,.18);
+  }
+  .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .logo { font-size: ${compact ? '25px' : '31px'}; font-weight: 300; letter-spacing: -2px; line-height: 1; }
+  .logo span { color: #128DFF; font-size: ${compact ? '39px' : '48px'}; font-weight: 200; margin: 0 -4px; text-shadow: 0 0 16px rgba(24,200,255,.60); }
+  .period { color: #BFEAFF; font-size: ${compact ? '12px' : '13px'}; font-weight: 900; text-align: right; }
+  h1 { margin: 14px 0 4px; font-size: ${compact ? '25px' : '28px'}; letter-spacing: -.5px; }
+  .meta { margin: 0; color: rgba(255,255,255,.68); font-size: ${compact ? '11px' : '12px'}; font-weight: 800; line-height: 1.35; }
+  .section-title {
+    margin: 16px 0 8px;
+    color: $fg;
+    font-size: ${compact ? '18px' : '17px'};
+    font-weight: 900;
+    letter-spacing: -.2px;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: ${compact ? 'repeat(3, 1fr)' : 'repeat(6, 1fr)'};
+    gap: ${compact ? '7px' : '9px'};
+    margin: 12px 0 0;
+  }
+  .stat {
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    padding: ${compact ? '10px 8px' : '11px'};
+  }
+  .stat span { display: block; color: rgba(255,255,255,.62); font-size: 9px; font-weight: 900; text-transform: uppercase; }
+  .stat b { display: block; margin-top: 5px; font-size: ${compact ? '16px' : '17px'}; color: white; }
+  .executive {
+    display: grid;
+    grid-template-columns: ${compact ? '1fr' : '1fr 1fr 1fr'};
+    gap: 9px;
+    margin-bottom: 12px;
+  }
+  .info-card {
+    background: $panel;
+    border: 1px solid $border;
+    border-radius: 16px;
+    padding: ${compact ? '12px' : '13px'};
+    break-inside: avoid;
+  }
+  .info-card span { display: block; color: $muted; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+  .info-card b { display: block; margin-top: 6px; font-size: ${compact ? '18px' : '17px'}; }
+  .day {
+    display: grid;
+    grid-template-columns: $dateWidth 1fr;
+    gap: 10px;
+    background: $panel;
+    border: 1px solid $border;
+    border-radius: 20px;
+    padding: $dayPadding;
+    margin-bottom: 10px;
+    break-inside: avoid;
+  }
+  .datebox {
+    border-right: 1px solid ${dark ? 'rgba(18,141,255,.30)' : '#CFE2F7'};
+    text-align: center;
+    padding-right: 8px;
+  }
+  .datebox span { display: block; color: $muted; font-size: 11px; font-weight: 900; }
+  .datebox strong { display: block; color: $fg; font-size: ${compact ? '34px' : '31px'}; line-height: 1; margin: 5px 0; }
+  .datebox small { display: block; color: #128DFF; font-size: 12px; font-weight: 900; }
+  .report {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: ${compact ? '9px 10px' : '8px 11px'};
+    border-radius: 13px;
+    background: $reportBg;
+    color: $reportFg;
+    border: 1px solid ${dark ? 'rgba(24,200,255,.22)' : '#B9DAFF'};
+    font-size: ${compact ? '13px' : '11px'};
+    font-weight: 900;
+  }
+  .report span { color: $fg; font-size: ${compact ? '16px' : '14px'}; }
+  .event {
+    display: grid;
+    grid-template-columns: $eventCols;
+    gap: $eventGap;
+    align-items: center;
+    padding: ${compact ? '10px 11px' : '9px 12px'};
+    margin-bottom: 7px;
+    background: ${dark ? 'rgba(255,255,255,.060)' : '#F8FBFF'};
+    border: 1px solid ${dark ? 'rgba(255,255,255,.085)' : '#E3ECF6'};
+    border-radius: 15px;
+    font-size: $eventFont;
+    line-height: 1.18;
+  }
+  .event-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: ${compact ? '6px 9px' : '5px 8px'};
+    color: white;
+    font-size: ${compact ? '12px' : '10px'};
+    font-weight: 900;
+    white-space: nowrap;
+  }
+  .event strong { color: $fg; font-size: ${compact ? '14px' : '12px'}; }
+  .duration {
+    border: 1px solid ${dark ? 'rgba(18,141,255,.35)' : '#B8D7F8'};
+    color: $muted;
+    border-radius: 999px;
+    padding: 3px 7px;
+    font-size: ${compact ? '11px' : '10px'};
+    font-weight: 900;
+    white-space: nowrap;
+  }
+  .route { color: $fg; font-size: ${compact ? '20px' : '13px'}; font-weight: 900; letter-spacing: -.3px; }
+  .time { color: $muted; font-size: ${compact ? '13px' : '11px'}; font-weight: 900; text-align: ${compact ? 'left' : 'right'}; }
+  .voo .pill { background: #128DFF; }
+  .reserva .pill { background: #E53935; }
+  .sobreaviso .pill { background: #F6B21A; }
+  .folga .pill { background: #19A65A; }
+  .inativo .pill { background: #7C8AA5; }
+  .calc {
+    display: grid;
+    grid-template-columns: ${compact ? '1fr' : 'repeat(2, 1fr)'};
+    gap: 9px;
+    margin-top: 10px;
+  }
+  .footer { color: $muted; text-align: center; font-size: 10px; font-weight: 800; padding: 12px 0 2px; }
+  @media print {
+    .canvas { width: 100%; }
+    .day, .info-card { break-inside: avoid; }
+  }
 </style>
-<script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); };</script>
+<script>window.onload = function() { setTimeout(function(){ window.print(); }, 450); };</script>
 </head>
 <body>
   <main class="canvas">
-    <div class="top">
-      <div class="logo">crew<span>4</span>u</div>
-      <div class="title"><h1>Minha escala</h1><p>${esc(mesReferenciaEscala())} • ${esc(selectedCargo)}</p></div>
-    </div>
+    <header class="hero">
+      <div class="brand">
+        <div class="logo">crew<span>4</span>u</div>
+        <div class="period">${esc(periodo)}</div>
+      </div>
+      <h1>Relatório de Escala</h1>
+      <p class="meta">${esc(arquivo)}<br>${esc(selectedCargo)} • Gerado no Crew 4U</p>
+      <section class="stats">
+        ${stat('Horas', horasVoo)}
+        ${stat('KM', kmTotal)}
+        ${stat('Reservas', reservas)}
+        ${stat('Sobreav.', sobreavisos)}
+        ${stat('Folgas', folgas)}
+        ${stat('28 dias', formatarMinutosComoHoras(calcularMinutosVooUltimos28Dias()))}
+      </section>
+    </header>
+
+    <h2 class="section-title">Resumo executivo</h2>
+    <section class="executive">
+      <div class="info-card"><span>Salário líquido estimado</span><b>${esc(formatarMoeda(salario['salario_liquido'], 'BRL'))}</b></div>
+      <div class="info-card"><span>Diárias BRL</span><b>${esc(diariasBrl)}</b></div>
+      <div class="info-card"><span>Diárias USD</span><b>${esc(diariasUsd)}</b></div>
+    </section>
+
+    <h2 class="section-title">Escala detalhada</h2>
     <section class="days">$dias</section>
-    <div class="foot">Crew 4U • escala para celular</div>
+
+    <h2 class="section-title">Resumo detalhado</h2>
+    <section class="calc">
+      <div class="info-card"><span>Proventos estimados</span><b>${esc(formatarMoeda(salario['proventos'], 'BRL'))}</b></div>
+      <div class="info-card"><span>Descontos estimados</span><b>-${esc(formatarMoeda(salario['descontos'], 'BRL'))}</b></div>
+      <div class="info-card"><span>KM diurno</span><b>${esc(formatarNumeroInteiro(financeiro['km_diurno'] ?? 0))}</b></div>
+      <div class="info-card"><span>KM noturno/fim de semana</span><b>${esc(formatarNumeroInteiro((financeiro['km_noturno'] ?? 0) + (financeiro['km_fim_semana'] ?? 0) + (financeiro['km_fim_semana_noturno'] ?? 0)))}</b></div>
+    </section>
+    <div class="footer">Crew 4U • relatório gerado automaticamente</div>
   </main>
 </body>
 </html>
-""";
+''';
+    }
 
-    final contentA4 =
-        """
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Crew 4U - Escala</title>
-<style>
-  @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; margin: 0; color: #061329; background: #F4F8FC; }
-  .header { background: linear-gradient(135deg, #061329, #0A1C38); color: white; border-radius: 22px; padding: 20px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 14px 30px rgba(6,19,41,.16); }
-  .logo { font-size: 30px; font-weight: 300; letter-spacing: -2px; }
-  .logo span { color: #128DFF; font-size: 46px; font-weight: 200; margin: 0 -3px; text-shadow: 0 0 12px rgba(24,200,255,.45); }
-  .sub { color: rgba(255,255,255,.70); font-size: 11px; margin-top: 4px; font-weight: 700; }
-  .month { padding: 10px 14px; border-radius: 999px; background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.12); font-size: 13px; font-weight: 900; }
-  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
-  .stat { background: white; border: 1px solid #DDE7F2; border-radius: 14px; padding: 10px; }
-  .stat span { color: #64748B; font-size: 9px; font-weight: 900; text-transform: uppercase; }
-  .stat b { display: block; margin-top: 5px; color: #061329; font-size: 15px; }
-  .day { background: white; border: 1px solid #D8E2EE; border-radius: 16px; overflow: hidden; margin-bottom: 9px; page-break-inside: avoid; }
-  h2 { margin: 0; padding: 9px 12px; background: #EAF5FF; font-size: 13px; color: #061329; }
-  .report { margin: 8px 10px 0; padding: 8px 10px; border-radius: 11px; background: #E8F4FF; color: #075CA8; font-size: 10.5px; font-weight: 800; border: 1px solid #B9DAFF; }
-  .event { display: grid; grid-template-columns: 1.1fr 1.2fr .9fr; gap: 8px; padding: 9px 12px; border-top: 1px solid #E6EEF7; font-size: 11px; align-items: center; }
-  .voo { border-left: 5px solid #128DFF; }
-  .reserva { border-left: 5px solid #E53935; }
-  .sobreaviso { border-left: 5px solid #F5B31A; }
-  .folga { border-left: 5px solid #19A65A; }
-</style>
-<script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); };</script>
-</head>
-<body>
-  <div class="header">
-    <div><div class="logo">crew<span>4</span>u</div><div class="sub">${esc(selectedFileName ?? '')}</div></div>
-    <div class="month">${esc(mesReferenciaEscala())}</div>
-  </div>
-  <section class="stats">
-    <div class="stat"><span>Horas de voo</span><b>${esc(horasVoo)}</b></div>
-    <div class="stat"><span>KM voados</span><b>${esc(kmTotal)}</b></div>
-    <div class="stat"><span>Reservas</span><b>${esc(reservas)}</b></div>
-    <div class="stat"><span>Sobreavisos</span><b>${esc(sobreavisos)}</b></div>
-    <div class="stat"><span>Folgas</span><b>${esc(folgas)}</b></div>
-  </section>
-  $dias
-</body>
-</html>
-""";
+    final contentCompacto = htmlRelatorio(
+      pageSize: '96mm 260mm',
+      dark: true,
+      compact: true,
+    );
+
+    final contentA4 = htmlRelatorio(
+      pageSize: 'A4',
+      dark: false,
+      compact: false,
+    );
 
     final contentWidescreen =
         """
@@ -9232,7 +9431,7 @@ class _CrewForYouHomePageState extends State<CrewForYouHomePage> {
       filename: widescreen
           ? 'crew4u_escala_16x9.html'
           : compacto
-          ? 'crew4u_escala_celular.html'
+          ? 'crew4u_relatorio_vertical.html'
           : 'crew4u_escala_a4.html',
       content: widescreen
           ? contentWidescreen
