@@ -1,11 +1,11 @@
 {
-    "name": "crewpay_web",
-    "short_name": "crewpay_web",
+    "name": "Crew 4U",
+    "short_name": "Crew 4U",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Crew 4U",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
